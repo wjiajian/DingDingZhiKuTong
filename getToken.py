@@ -8,6 +8,8 @@ from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_dingtalk.oauth2_1_0 import models as dingtalkoauth_2__1__0_models
 from alibabacloud_tea_util.client import Client as UtilClient
 
+app_key='<YOUR_APP_KEY>'
+app_secret='<YOUR_APP_SECRET>'
 
 class Sample:
     def __init__(self):
@@ -31,8 +33,8 @@ class Sample:
     ) -> None:
         client = Sample.create_client()
         get_access_token_request = dingtalkoauth_2__1__0_models.GetAccessTokenRequest(
-            app_key='<YOUR_APP_KEY>',
-            app_secret='<YOUR_APP_SECRET>'
+            app_key=app_key,
+            app_secret=app_secret
         )
         try:
             response =client.get_access_token(get_access_token_request)
@@ -49,8 +51,8 @@ class Sample:
     ) -> None:
         client = Sample.create_client()
         get_access_token_request = dingtalkoauth_2__1__0_models.GetAccessTokenRequest(
-            app_key='<YOUR_APP_KEY>',
-            app_secret='<YOUR_APP_SECRET>'
+            app_key=app_key,
+            app_secret=app_secret
         )
         try:
             response = await client.get_access_token_async(get_access_token_request)
