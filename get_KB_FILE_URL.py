@@ -5,18 +5,18 @@
 
 工作流程:
 1. 调用钉钉开放平台API获取知识库列表。
-2. 将获取的知识库列表写入 workspaces_list_new.json 文件。
+2. 将获取的知识库列表写入 json 文件。
 3. 从返回的知识库列表中根据知识库名称查找根节点的ID。
 4. 使用钉钉开放平台的API，从根节点开始，递归地遍历所有子节点。
-5. 将遍历过程中获取的所有节点信息写入 nodelist_new.json 文件。
+5. 将遍历过程中获取的所有节点信息写入 json 文件。
 6. 如果节点是文件 (FILE)，则将其URL写入到指定的输出文件中。
 
 使用前请确保:
 - 已安装所需的Python库: `alibabacloud_dingtalk`, `alibabacloud_tea_openapi`, `alibabacloud_tea_util`
-- 已正确填写下面的配置信息 (ACCESS_TOKEN, OPERATOR_ID, WORKSPACE_NAME)。
 """
-
+import os
 import json
+import datetime
 from typing import List, Dict, Any
 
 # 导入钉钉开放平台Wiki相关的SDK客户端和模型
@@ -28,12 +28,25 @@ from alibabacloud_tea_util.client import Client as UtilClient
 
 # --- 配置区 ---
 # 请根据您的实际情况修改以下配置
-ACCESS_TOKEN = "YOUR_ACCESS_TOKEN"       # 访问钉钉API的access_token，需要通过钉钉开发者后台获取
-OPERATOR_ID = "YOUR_OPERATOR_ID"             # 钉钉用户的unionId，需要通过钉钉开发者后台获取
-WORKSPACE_NAME = "YOUR_WORKSPACE_NAME"                    # 需要遍历的目标知识库的完整名称
-OUTPUT_FILE = "file_urls.txt"                           # 定义输出文件的名称，用于存储所有文档的URL
-WORKSPACE_LIST_OUTPUT_FILE = "workspaces_list.json" # 存储获取的知识库列表的文件
-NODE_LIST_OUTPUT_FILE = "nodelist.json"             # 存储获取的节点列表的文件
+ACCESS_TOKEN = ""                                         # 访问钉钉API的access_token
+OPERATOR_ID = ""                                          # 钉钉用户的unionId，需要通过钉钉开发者后台获取
+WORKSPACE_NAME = ""                                       # 需要遍历的目标知识库的完整名称
+OUTPUT_FILE = ""                                          # 定义输出文件的名称，用于存储所有文档的URL
+WORKSPACE_LIST_OUTPUT_FILE = ""                           # 存储获取的知识库列表的文件
+KB_TREE_OUTPUT_FILE = ""                                  # 存储知识库完整文件树的JSON文件
+NAS_ROOT_PATH = ""                                        # 要对比的本地NAS文件夹根路径
+# WORKSPACE_NAME = "知识库导入NAS测试库"                    # 需要遍历的目标知识库的完整名称
+# OUTPUT_FILE = ".\url.json"                              # 定义输出文件的名称，用于存储所有文档的URL
+# WORKSPACE_LIST_OUTPUT_FILE = ".\workspaces_list.json"   # 存储获取的知识库列表的文件
+# KB_TREE_OUTPUT_FILE = ".\kb_tree.json"
+# NAS_ROOT_PATH = ".\path"
+
+# 钉钉文件后缀到标准Office后缀的映射
+EXTENSION_MAPPING = {
+    '.adoc': '.docx',
+    '.axls': '.xlsx',
+    '.aslide': '.pptx',
+}
 
 def get_workspaces(access_token: str, operator_id: str):
     """
@@ -86,7 +99,7 @@ def get_workspace_data(workspace_name: str, access_token: str, operator_id: str)
                 print(f"成功找到知识库 '{workspace_name}'")
                 return workspace.get("rootNodeId"), workspaces
     else:
-        print("错误: 未能从API获取到有效的知识库列表。")
+        print("错误: 未能从API获取到有效的知识库列表。" )
     
     return None, None
 
@@ -144,50 +157,163 @@ def get_node_list(node_id: str, access_token: str, operator_id: str) -> List:
             
     return all_nodes
 
-def traverse_nodes(node_id: str, access_token: str, operator_id: str, out_file, all_nodes_list: list):
+def traverse_kb_nodes(node_id: str, access_token: str, operator_id: str, parent_path: str, file_tree: dict):
     """
-    递归地遍历所有节点，收集节点信息，并将文件URL写入文件。
+    递归地遍历所有知识库节点，构建文件树。
 
     Args:
         node_id (str): 当前要遍历的父节点的ID。
         access_token (str): API访问令牌。
         operator_id (str): 操作人的unionId。
-        out_file (file object): 用于写入URL的文件对象。
-        all_nodes_list (list): 用于收集所有节点信息的列表。
+        parent_path (str): 父节点的路径。
+        file_tree (dict): 用于存储文件树的字典。
     """
     nodes = get_node_list(node_id, access_token, operator_id)
     if nodes:
         for node in nodes:
-            print(f"  正在处理节点: {node.name} (类型: {node.type})")
-            # 将节点信息转换为字典并添加到列表中
-            all_nodes_list.append(node.to_map())
+            # 替换路径中可能存在的无效字符
+            safe_node_name = node.name.replace('/', '_').replace('\\', '_')
+            current_path = f"{parent_path}/{safe_node_name}" if parent_path else safe_node_name
+            print(f"  正在处理知识库节点: {current_path} (类型: {node.type})")
             
             if node.type == "FOLDER":
-                traverse_nodes(node.node_id, access_token, operator_id, out_file, all_nodes_list)
+                traverse_kb_nodes(node.node_id, access_token, operator_id, current_path, file_tree)
             elif node.type == "FILE":
-                out_file.write(node.url + "\n")
+                # --- 新增：处理文件后缀名 ---
+                name, ext = os.path.splitext(current_path)
+                if ext in EXTENSION_MAPPING:
+                    new_ext = EXTENSION_MAPPING[ext]
+                    final_path = name + new_ext
+                    print(f"    后缀名转换: '{ext}' -> '{new_ext}'")
+                else:
+                    final_path = current_path
+                # --- 结束 ---
 
-# --- 主程序入口 ---
-if __name__ == "__main__":
+                file_tree[final_path] = {
+                    "modifiedTime": node.modified_time,
+                    "url": node.url
+                }
+
+def get_nas_file_tree(nas_root_path):
+    """
+    生成NAS文件夹的文件树结构.
+    """
+    print(f"\n正在扫描本地NAS文件夹: {nas_root_path}")
+    file_tree = {}
+    if not os.path.isdir(nas_root_path):
+        print(f"警告: 本地NAS路径 '{nas_root_path}' 不存在或不是一个目录。将视为空文件夹。" )
+        return file_tree
+
+    for root, _, files in os.walk(nas_root_path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            # 使用os.path.normpath来规范化路径分隔符
+            relative_path = os.path.normpath(os.path.relpath(file_path, nas_root_path))
+            # 将Windows路径分隔符'\'统一替换为'/'
+            relative_path = relative_path.replace('\\', '/')
+            
+            modified_time = os.path.getmtime(file_path)
+            # 将时间戳转换为UTC时间的ISO 8601格式字符串，并附加'Z'
+            modified_time_iso = datetime.datetime.utcfromtimestamp(modified_time).isoformat(timespec='seconds') + 'Z'
+            
+            file_tree[relative_path] = {
+                "modifiedTime": modified_time_iso,
+                "path": file_path
+            }
+    print("本地NAS文件夹扫描完成。" )
+    return file_tree
+
+def compare_trees_and_get_urls(kb_tree, nas_tree):
+    """
+    比较知识库和NAS的文件树，返回需要下载的URL列表.
+    """
+    print("\n正在比较知识库与本地NAS文件...")
+    urls_to_download = []
+
+    for kb_path, kb_info in kb_tree.items():
+        # 检查文件是否在NAS中不存在
+        if kb_path not in nas_tree:
+            print(f"[新增] 文件 '{kb_path}' 在本地不存在，准备下载。" )
+            urls_to_download.append(kb_info['url'])
+        else:
+            # 文件已存在，比较修改时间
+            try:
+                # 解析不含毫秒和'Z'的ISO 8601时间字符串
+                nas_time_str = nas_tree[kb_path]['modifiedTime'].split('.')[0].replace('Z', '')
+                kb_time_str = kb_info['modifiedTime'].split('.')[0].replace('Z', '')
+                
+                nas_time = datetime.datetime.fromisoformat(nas_time_str)
+                kb_time = datetime.datetime.fromisoformat(kb_time_str)
+
+                if kb_time > nas_time:
+                    print(f"[更新] 文件 '{kb_path}' 在知识库中已更新，准备下载。 (知识库: {kb_time} > 本地: {nas_time})")
+                    urls_to_download.append(kb_info['url'])
+            except (ValueError, KeyError) as e:
+                print(f"警告: 处理文件 '{kb_path}' 的时间戳时出错: {e}。将默认下载该文件。" )
+                urls_to_download.append(kb_info['url'])
+
+    print("文件比较完成。" )
+    return urls_to_download
+
+
+def getdata(name, output, workspace_list, kb_tree_file, nas_path):
+    global WORKSPACE_NAME, OUTPUT_FILE, WORKSPACE_LIST_OUTPUT_FILE, KB_TREE_OUTPUT_FILE, NAS_ROOT_PATH
+    WORKSPACE_NAME = name
+    OUTPUT_FILE = output
+    WORKSPACE_LIST_OUTPUT_FILE = workspace_list
+    KB_TREE_OUTPUT_FILE = kb_tree_file
+    NAS_ROOT_PATH = nas_path
+
+
+def main(name, output, workspace_list, kb_tree_file, nas_path, token):
+    # 初始化参数
+    getdata(name, output, workspace_list, kb_tree_file, nas_path)
+    global ACCESS_TOKEN
+    ACCESS_TOKEN = token
+
     # 1. 从API获取知识库数据并找到根节点ID
-    root_node_id, workspaces_list = get_workspace_data(WORKSPACE_NAME, ACCESS_TOKEN, OPERATOR_ID)
+    root_node_id, _ = get_workspace_data(WORKSPACE_NAME, ACCESS_TOKEN, OPERATOR_ID)
 
     if root_node_id:
-        print(f"开始遍历知识库: '{WORKSPACE_NAME}' (根节点ID: {root_node_id})")
-        
-        all_nodes_collected = []
-        
-        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-            traverse_nodes(root_node_id, ACCESS_TOKEN, OPERATOR_ID, f, all_nodes_collected)
-            
-        # 5. 将收集到的所有节点信息写入新文件
-        try:
-            with open(NODE_LIST_OUTPUT_FILE, "w", encoding="utf-8") as f:
-                json.dump(all_nodes_collected, f, ensure_ascii=False, indent=4)
-            print(f"\n所有节点信息已成功写入到 '{NODE_LIST_OUTPUT_FILE}'")
-        except IOError as e:
-            print(f"错误: 无法写入文件 '{NODE_LIST_OUTPUT_FILE}': {e}")
+        # 2. 获取知识库文件树
+        print(f"\n开始遍历知识库: '{WORKSPACE_NAME}' (根节点ID: {root_node_id})")
+        kb_tree = {}
+        traverse_kb_nodes(root_node_id, ACCESS_TOKEN, OPERATOR_ID, "", kb_tree)
+        print("知识库遍历完成。" )
 
-        print(f"\n遍历完成！结果已保存到文件: {OUTPUT_FILE}")
+        # 3. 将完整的知识库文件树写入JSON文件，供compare_move_file.py使用
+        try:
+            with open(KB_TREE_OUTPUT_FILE, "w", encoding="utf-8") as f:
+                json.dump(kb_tree, f, ensure_ascii=False, indent=4)
+            print(f"完整的知识库文件树已成功写入到 '{KB_TREE_OUTPUT_FILE}'")
+        except IOError as e:
+            print(f"错误: 无法写入知识库文件树 '{KB_TREE_OUTPUT_FILE}': {e}")
+
+
+        # 4. 获取NAS文件树
+        nas_tree = get_nas_file_tree(NAS_ROOT_PATH)
+
+        # 5. 比较文件树并获取需要下载的URL
+        urls_to_download = compare_trees_and_get_urls(kb_tree, nas_tree)
+            
+        # 6. 将需要下载的URL写入文件
+        if urls_to_download:
+            print(f"\n--- 发现 {len(urls_to_download)} 个文件需要下载 ---")
+            try:
+                with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+                    for url in urls_to_download:
+                        f.write(url + "\n")
+                print(f"需要下载的URL列表已成功写入到 '{OUTPUT_FILE}'")
+            except IOError as e:
+                print(f"错误: 无法写入URL列表文件 '{OUTPUT_FILE}': {e}")
+        else:
+            print("\n--- 所有文件都是最新的，无需下载。 ---")
+
+        print("\n任务完成！" )
     else:
-        print(f"错误: 无法找到名为 '{WORKSPACE_NAME}' 的知识库。请检查名称是否正确 সন")
+        print(f"错误: 无法找到名为 '{WORKSPACE_NAME}' 的知识库。请检查名称是否正确。" )
+
+if __name__ == "__main__":
+    # 这是一个示例，实际使用时请通过外部调用并传入参数
+    # main("知识库名称", "path/to/urls.txt", "path/to/workspaces.json", "path/to/kb_tree.json", "path/to/nas", "your_token")
+    pass
