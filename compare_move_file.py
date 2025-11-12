@@ -1,89 +1,163 @@
 import os
+import json
 import shutil
-import filecmp
 
-def sync_folders(source_folder, destination_folder, dry_run):
+def sync_nas_with_kb_tree(kb_tree_file, source_folder, destination_folder, dry_run=False):
     """
-    同步两个文件夹，使目标文件夹(destination_folder)与源文件夹(source_folder)保持一致。
+    使用知识库文件树（kb_tree.json）作为权威来源，同步NAS文件夹。
 
-    :param source_folder: 源文件夹的路径
-    :param destination_folder: 目标文件夹的路径 (需要被更新的文件夹)
-    :param dry_run: 是否为演练模式。True时，只打印将要执行的操作，不实际修改文件。
+    1. 删除NAS中不存在于知识库树中的文件和文件夹。
+    2. 将源文件夹（已下载的新文件）中的内容移动到NAS目标文件夹。
+
+    :param kb_tree_file: kb_tree.json文件的路径。
+    :param source_folder: 包含新下载和整理好的文件的源文件夹。
+    :param destination_folder: 最终要同步的NAS目标文件夹。
+    :param dry_run: 是否为演练模式。True时只打印操作，不实际执行。
     """
     print("--- 开始同步 ---")
-    print(f"源文件夹: {source_folder}")
-    print(f"目标文件夹: {destination_folder}")
-    if dry_run:
-        print("模式: 演练模式 (不会修改任何文件)")
-    else:
-        print("模式: 正式执行模式 (将会修改文件!)")
+    print(f"知识库树: {kb_tree_file}")
+    print(f"源文件夹 (新文件): {source_folder}")
+    print(f"目标文件夹 (NAS): {destination_folder}")
+    mode = "演练模式" if dry_run else "正式执行"
+    print(f"模式: {mode}")
     print("-" * 20)
 
-    # 在比较之前，确保顶层目标文件夹存在
-    print(f"检查目标文件夹是否存在: {destination_folder}")
+    # 1. 加载知识库文件树
+    try:
+        with open(kb_tree_file, 'r', encoding='utf-8') as f:
+            kb_tree = json.load(f)
+        print("成功加载知识库文件树。")
+    except FileNotFoundError:
+        print(f"错误: 知识库文件树 '{kb_tree_file}' 未找到。无法继续。")
+        return
+    except json.JSONDecodeError:
+        print(f"错误: 解析知识库文件树 '{kb_tree_file}' 失败。")
+        return
+
+    # 规范化kb_tree的键，以匹配本地文件系统
+    # 将所有路径分隔符统一为os.sep
+    normalized_kb_paths = {os.path.normpath(p) for p in kb_tree.keys()}
+
+    # --- 2. 清理阶段 ---
+    print("\n--- 阶段 1: 清理目标文件夹 ---")
     if not os.path.isdir(destination_folder):
-        print(f"目标文件夹不存在。")
-        if not dry_run:
-            print(f"正在创建目标文件夹: {destination_folder}")
-            os.makedirs(destination_folder, exist_ok=True) # 使用 makedirs 创建文件夹，可以创建多级目录
-        else:
-            # 在演练模式下，如果目标文件夹不存在，后续比较会失败。
-            # 提示并返回。
-            print("[演练模式] 目标文件夹不存在，无法进行比较。同步将在此处停止。")
-            print("\n--- 同步完成 ---")
-            return
+        print(f"目标文件夹 {destination_folder} 不存在，无需清理。")
+    else:
+        # 从下到上遍历，先处理文件，再处理目录
+        for root, dirs, files in os.walk(destination_folder, topdown=False):
+            # 清理文件
+            for name in files:
+                file_path = os.path.join(root, name)
+                relative_path = os.path.normpath(os.path.relpath(file_path, destination_folder))
+                if relative_path not in normalized_kb_paths:
+                    print(f"[删除文件] {relative_path}")
+                    if not dry_run:
+                        try:
+                            os.remove(file_path)
+                        except OSError as e:
+                            print(f"  错误: 删除文件失败: {e}")
 
-    # 1. 创建顶层比较对象
-    # hide=[os.curdir, os.pardir] 忽略当前和上级目录的特殊符号
-    # ignore=['.DS_Store', 'Thumbs.db'] 可以添加你想要忽略的系统文件名
-    comparison = filecmp.dircmp(source_folder, destination_folder, ignore=['.DS_Store', 'Thumbs.db'])
+            # 清理目录
+            for name in dirs:
+                dir_path = os.path.join(root, name)
+                # 检查目录是否为空
+                if not os.listdir(dir_path):
+                    # 检查该目录本身是否应该存在（通过检查是否有任何kb路径以它开头）
+                    relative_path = os.path.normpath(os.path.relpath(dir_path, destination_folder))
+                    
+                    # 如果没有任何知识库文件路径以这个目录作为前缀，那么它就是多余的
+                    is_needed_dir = any(p.startswith(relative_path + os.sep) for p in normalized_kb_paths)
+                    
+                    if not is_needed_dir:
+                        print(f"[删除空目录] {relative_path}")
+                        if not dry_run:
+                            try:
+                                os.rmdir(dir_path)
+                            except OSError as e:
+                                print(f"  错误: 删除目录失败: {e}")
+    print("清理阶段完成。")
 
-    # 2. 调用递归函数执行同步
-    _sync_recursive(comparison, source_folder, destination_folder, dry_run)
+    # --- 3. 移动/复制阶段 ---
+    print("\n--- 阶段 2: 移动新文件 ---")
+    if not os.path.isdir(source_folder):
+        print(f"源文件夹 {source_folder} 不存在，没有新文件需要移动。")
+    else:
+        for root, _, files in os.walk(source_folder):
+            for name in files:
+                source_path = os.path.join(root, name)
+                relative_path = os.path.relpath(source_path, source_folder)
+                destination_path = os.path.join(destination_folder, relative_path)
+                
+                print(f"[移动文件] {relative_path}")
+                
+                if not dry_run:
+                    try:
+                        # 确保目标目录存在
+                        os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+                        # 移动文件，shutil.move会覆盖现有文件
+                        shutil.move(source_path, destination_path)
+                    except (OSError, shutil.Error) as e:
+                        print(f"  错误: 移动文件失败: {e}")
+        print("移动新文件阶段完成。")
 
     print("\n--- 同步完成 ---")
 
 
-def _sync_recursive(dcmp, source_root, dest_root, dry_run):
-    """递归同步的核心函数"""
+if __name__ == '__main__':
+    # --- 示例用法 ---
+    # 1. 知识库的完整文件结构
+    KB_TREE_JSON = 'kb_tree.json' 
 
-    # 3. 新增和更新
-    # 3.1 处理源文件夹中独有的文件和目录 (dcmp.left_only)
-    for name in dcmp.left_only:
-        source_path = os.path.join(dcmp.left, name)
-        dest_path = os.path.join(dcmp.right, name)
+    # 2. 下载了新文件并按目录结构整理好的文件夹
+    SOURCE_DIR = 'download_new' 
 
-        if os.path.isdir(source_path):
-            print(f"[新增目录] 准备复制: {source_path} -> {dest_path}")
-            if not dry_run:
-                shutil.copytree(source_path, dest_path)
-        else:
-            print(f"[新增文件] 准备复制: {source_path} -> {dest_path}")
-            if not dry_run:
-                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                shutil.copy2(source_path, dest_path)
+    # 3. 最终要同步到的NAS文件夹
+    DEST_DIR = 'nas_final' 
+    
+    
+    # 假设这是我们的kb_tree.json内容
+    sample_kb_tree = {
+        "folder1/file1.txt": {"modifiedTime": "...", "url": "..."},
+        "folder1/new_file.txt": {"modifiedTime": "...", "url": "..."},
+        "file_at_root.txt": {"modifiedTime": "...", "url": "..."},
+    }
+    with open(KB_TREE_JSON, 'w', encoding='utf-8') as f:
+        json.dump(sample_kb_tree, f)
 
-    # 3.2 处理内容不同的文件 (dcmp.diff_files)
-    for name in dcmp.diff_files:
-        source_path = os.path.join(dcmp.left, name)
-        dest_path = os.path.join(dcmp.right, name)
-        print(f"[更新文件] 准备复制: {source_path} -> {dest_path}")
-        if not dry_run:
-            shutil.copy2(source_path, dest_path)
+    # 准备模拟环境
+    # 创建一个假的NAS目录，包含一个将被删除的文件
+    os.makedirs(os.path.join(DEST_DIR, 'folder1'), exist_ok=True)
+    os.makedirs(os.path.join(DEST_DIR, 'folder_to_delete'), exist_ok=True)
+    with open(os.path.join(DEST_DIR, 'folder1', 'file1.txt'), 'w') as f: f.write('old')
+    with open(os.path.join(DEST_DIR, 'folder_to_delete', 'old_file.txt'), 'w') as f: f.write('delete me')
+    
+    # 创建一个假的源目录，包含新文件
+    os.makedirs(os.path.join(SOURCE_DIR, 'folder1'), exist_ok=True)
+    with open(os.path.join(SOURCE_DIR, 'folder1', 'new_file.txt'), 'w') as f: f.write('new')
+    with open(os.path.join(SOURCE_DIR, 'file_at_root.txt'), 'w') as f: f.write('new root file')
 
-    # 4. 删除
-    # right_only 是目标文件夹中多余的文件或文件夹
-    for filename in dcmp.right_only:
-        path_to_delete = os.path.join(dcmp.right, filename)
-        if os.path.isdir(path_to_delete):
-            print(f"[删除目录] 准备删除: {path_to_delete}")
-            if not dry_run:
-                shutil.rmtree(path_to_delete)
-        else:
-            print(f"[删除文件] 准备删除: {path_to_delete}")
-            if not dry_run:
-                os.remove(path_to_delete)
+    print("--- 准备模拟环境完成 ---")
+    print("NAS目录结构:", list(os.walk(DEST_DIR)))
+    print("源目录结构:", list(os.walk(SOURCE_DIR)))
+    print("-" * 20)
 
-    # 5. 递归进入子文件夹 (对于两边都存在的目录)
-    for sub_dir_name, sub_dcmp in dcmp.subdirs.items():
-        _sync_recursive(sub_dcmp, source_root, dest_root, dry_run)
+    # 执行同步（演练模式）
+    sync_nas_with_kb_tree(KB_TREE_JSON, SOURCE_DIR, DEST_DIR, dry_run=True)
+    
+    print("\n--- 演练模式后，检查文件是否变动 (应该没有) ---")
+    print("NAS目录结构:", list(os.walk(DEST_DIR)))
+    print("源目录结构:", list(os.walk(SOURCE_DIR)))
+    print("-" * 20)
+
+    # 执行同步（正式模式）
+    sync_nas_with_kb_tree(KB_TREE_JSON, SOURCE_DIR, DEST_DIR, dry_run=False)
+
+    print("\n--- 正式执行后，检查文件是否变动 ---")
+    print("NAS目录结构:", list(os.walk(DEST_DIR)))
+    print("源目录结构 (应该空了):", list(os.walk(SOURCE_DIR)))
+    print("-" * 20)
+
+    # 清理模拟文件
+    shutil.rmtree(DEST_DIR)
+    shutil.rmtree(SOURCE_DIR)
+    os.remove(KB_TREE_JSON)
