@@ -49,6 +49,7 @@ pip install alibabacloud_dingtalk alibabacloud_tea_openapi alibabacloud_tea_util
 *   `getToken.py`: 用于获取钉钉API的 `access_token`。
 *   `get_KB_FILE_URL.py`: 用于比较线上知识库和本地NAS，并生成 `kb_tree.json` 和 `urls_to_download.txt`。
 *   `compare_move_file.py`: 使用 `kb_tree.json` 作为蓝图，将下载好的新文件同步到最终的NAS目录，并清理多余文件。
+*   `write_file_excel.py`: 读取Excel表格中单元格内的链接，获取链接对应的文档内容，并将其写入到Excel表格的对应位置。
 *   `kb_tree.json`: (程序生成) 包含了知识库中所有文件的完整目录结构、修改时间和URL。
 *   `urls_to_download.txt`: (程序生成) 本次需要下载的新文件或更新文件的URL列表。
 *   `workspaces_list.json`: (程序生成) 您的钉钉账号下所有知识库的列表，供参考。
