@@ -214,7 +214,7 @@ def get_nas_file_tree(nas_root_path):
             
             modified_time = os.path.getmtime(file_path)
             # 将时间戳转换为UTC时间的ISO 8601格式字符串，并附加'Z'
-            modified_time_iso = datetime.datetime.utcfromtimestamp(modified_time).isoformat(timespec='seconds') + 'Z'
+            modified_time_iso = datetime.datetime.fromtimestamp(modified_time).isoformat(timespec='seconds') + 'Z'
             
             file_tree[relative_path] = {
                 "modifiedTime": modified_time_iso,
