@@ -2,7 +2,7 @@ import os
 import openpyxl
 import docx
 from openpyxl.utils import get_column_letter
-from xbot import print
+# from xbot import print
 
 # --- 模块化的内容读取区域 ---
 # 未来若要添加对新文件类型（例如 .csv）的支持:
@@ -15,7 +15,7 @@ def read_txt_content(file_path: str) -> str:
         with open(file_path, 'r', encoding='utf-8') as f:
             return f.read()
     except Exception as e:
-        return f"读取 TXT 时出错: {e}"
+        return f"读取 TXT 文件 '{file_path}' 时出错: {e}"
 
 def read_docx_content(file_path: str) -> str:
     """从 .docx 文件中读取内容。"""
@@ -24,7 +24,7 @@ def read_docx_content(file_path: str) -> str:
         full_text = [para.text for para in doc.paragraphs]
         return '\n'.join(full_text)
     except Exception as e:
-        return f"读取 DOCX 时出错: {e}"
+        return f"读取 DOCX 文件 '{file_path}' 时出错: {e}"
 
 def read_xlsx_content(file_path: str) -> str:
     """
@@ -63,7 +63,7 @@ def read_xlsx_content(file_path: str) -> str:
     except FileNotFoundError:
         return f"错误：Excel 文件未找到 '{file_path}'"
     except Exception as e:
-        return f"读取 XLSX 时出错: {e}"
+        return f"读取 XLSX 文件 '{file_path}' 时出错: {e}"
 
 # 这是分发字典，它将文件扩展名映射到正确的读取函数。
 FILE_READERS = {
@@ -79,7 +79,7 @@ def get_content_from_file(file_path: str) -> str:
     它使用 FILE_READERS 字典来查找并调用正确的读取器。
     """
     if not os.path.exists(file_path):
-        return "错误：链接的文件不存在"
+        return f"错误：链接的文件 '{file_path}' 不存在"
     
     # 获取文件的扩展名
     _, extension = os.path.splitext(file_path)
@@ -92,7 +92,23 @@ def get_content_from_file(file_path: str) -> str:
         return reader_func(file_path)
     else:
         # 否则，返回不支持的类型错误
-        return f"错误：不支持的文件类型 ({extension})"
+        return f"错误：文件 '{file_path}' 的类型 ({extension}) 不受支持"
+
+def format_as_markdown(content: str, file_extension: str) -> str:
+    """
+    将提取的文本内容格式化为 Markdown 代码块。
+    :param content: 从文件中读取的原始文本内容。
+    :param file_extension: 文件的扩展名（例如 '.txt'），用于代码块的语言标识。
+    :return: 格式化后的 Markdown 字符串。
+    """
+    # 移除扩展名前的点，使其成为一个更干净的语言标识符
+    lang_identifier = file_extension.lstrip('.')
+    
+    # 对于已知不支持的标识符或空标识符，使用 'text' 作为默认
+    if not lang_identifier or lang_identifier in ['docx']:
+        lang_identifier = 'text'
+        
+    return f"```{lang_identifier}\n{content}\n```"
 
 # --- 主 Excel 处理逻辑 ---
 
@@ -105,8 +121,11 @@ def process_excel_in_place(excel_path: str):
         workbook = openpyxl.load_workbook(excel_path)
         sheet = workbook.active
         print(f"成功加载文件: '{excel_path}'")
+    except FileNotFoundError:
+        print(f"错误：Excel 文件 '{excel_path}' 不存在。请检查路径是否正确。")
+        return
     except Exception as e:
-        print(f"加载 Excel 文件时出错: {e}")
+        print(f"加载 Excel 文件 '{excel_path}' 时出错: {e}")
         return
 
     # 获取Excel文件所在的绝对目录
@@ -150,10 +169,16 @@ def process_excel_in_place(excel_path: str):
         print(f"  - 正在处理 {link_cell.coordinate}: '{relative_or_absolute_path}' -> 解析为 '{full_path}'")
         
         # 使用解析后的完整路径来获取内容
-        content = get_content_from_file(full_path)
+        raw_content = get_content_from_file(full_path)
+        
+        # 获取文件扩展名以用于 markdown 格式化
+        _, extension = os.path.splitext(full_path)
+        
+        # 将内容格式化为 markdown
+        md_content = format_as_markdown(raw_content, extension)
         
         content_cell = sheet.cell(row=link_cell.row, column=content_col_idx)
-        content_cell.value = content
+        content_cell.value = md_content
 
     try:
         print(f"\n正在将更改保存到原始文件: '{excel_path}'...")
@@ -162,7 +187,7 @@ def process_excel_in_place(excel_path: str):
     except PermissionError:
         print(f"\n错误：无法保存文件。请确保 '{excel_path}' 没有被其他程序（如Excel）打开。")
     except Exception as e:
-        print(f"\n保存文件时发生未知错误: {e}")
+        print(f"\n保存文件 '{excel_path}' 时发生未知错误: {e}")
 
 # --- 脚本主入口 ---
 if __name__ == "__main__":
