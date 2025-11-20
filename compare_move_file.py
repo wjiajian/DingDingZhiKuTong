@@ -114,33 +114,6 @@ if __name__ == '__main__':
     # 3. 最终要同步到的NAS文件夹
     DEST_DIR = 'nas_final' 
     
-    
-    # 假设这是我们的kb_tree.json内容
-    sample_kb_tree = {
-        "folder1/file1.txt": {"modifiedTime": "...", "url": "..."},
-        "folder1/new_file.txt": {"modifiedTime": "...", "url": "..."},
-        "file_at_root.txt": {"modifiedTime": "...", "url": "..."},
-    }
-    with open(KB_TREE_JSON, 'w', encoding='utf-8') as f:
-        json.dump(sample_kb_tree, f)
-
-    # 准备模拟环境
-    # 创建一个假的NAS目录，包含一个将被删除的文件
-    os.makedirs(os.path.join(DEST_DIR, 'folder1'), exist_ok=True)
-    os.makedirs(os.path.join(DEST_DIR, 'folder_to_delete'), exist_ok=True)
-    with open(os.path.join(DEST_DIR, 'folder1', 'file1.txt'), 'w') as f: f.write('old')
-    with open(os.path.join(DEST_DIR, 'folder_to_delete', 'old_file.txt'), 'w') as f: f.write('delete me')
-    
-    # 创建一个假的源目录，包含新文件
-    os.makedirs(os.path.join(SOURCE_DIR, 'folder1'), exist_ok=True)
-    with open(os.path.join(SOURCE_DIR, 'folder1', 'new_file.txt'), 'w') as f: f.write('new')
-    with open(os.path.join(SOURCE_DIR, 'file_at_root.txt'), 'w') as f: f.write('new root file')
-
-    print("--- 准备模拟环境完成 ---")
-    print("NAS目录结构:", list(os.walk(DEST_DIR)))
-    print("源目录结构:", list(os.walk(SOURCE_DIR)))
-    print("-" * 20)
-
     # 执行同步（演练模式）
     sync_nas_with_kb_tree(KB_TREE_JSON, SOURCE_DIR, DEST_DIR, dry_run=True)
     
