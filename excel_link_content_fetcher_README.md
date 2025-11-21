@@ -82,37 +82,11 @@ config = DocumentProcessingConfig(
 processor = EnhancedExcelProcessor(config)
 
 # 处理单个文件
-result = processor.process_excel_file("your_file.xlsx", dry_run=True)
+result = processor.process_excel_file("your_file.xlsx")
 
 # 批量处理
 file_list = ["file1.xlsx", "file2.xlsx", "file3.xlsx"]
 results = processor.process_multiple_files(file_list)
-```
-
-### 3. 环境检查
-
-```python
-# 检查运行环境
-processor = EnhancedExcelProcessor()
-processor.print_environment_report()
-
-# 输出示例：
-# ============================================================
-# Excel链接内容提取器 - 环境报告
-# ============================================================
-# Unstructured库: ✅ 已安装
-#   版本: 0.16.17
-# OpenPyXL库: ✅ 已安装
-#   版本: 3.1.2
-# 备份目录: ✅ 可写
-#   位置: ./backup/
-# 
-# 支持的文档格式:
-#    1. .pdf
-#    2. .docx
-#    3. .doc
-# ...
-# ============================================================
 ```
 
 ## ⚙️ 配置选项
@@ -184,7 +158,6 @@ processor.print_environment_report()
 {
     'file_path': 'your_file.xlsx',
     'processed_at': '2025-11-20T10:30:00',
-    'dry_run': False,
     'total_links': 5,
     'successful': 4,
     'failed': 1,
@@ -239,20 +212,3 @@ processor.print_environment_report()
 - 设置 `partition_strategy="fast"` 提升速度
 - 调整 `max_content_length` 控制内存使用
 - 启用错误继续处理 `continue_on_error=True`
-
-## 🔐 安全特性
-
-### 备份机制
-- 自动创建时间戳备份
-- 支持硬链接节省空间
-- 处理失败时自动恢复
-
-### 权限控制
-- 文件存在性验证
-- 路径安全检查
-- 异常恢复机制
-
-### 日志记录
-- 详细的处理日志
-- 错误信息追踪
-- 性能监控数据

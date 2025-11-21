@@ -95,7 +95,7 @@ config = DocumentProcessingConfig(
 processor = EnhancedExcelProcessorLLM(config)
 
 # 处理Excel文件
-result = processor.process_excel_file("your_file.xlsx", dry_run=True)
+result = processor.process_excel_file("your_file.xlsx")
 ```
 
 ### 2. 批量处理
@@ -170,7 +170,7 @@ config = DocumentProcessingConfig(
 processor = EnhancedExcelProcessorLLM(config)
 
 # 处理Excel文件
-result = processor.process_excel_file("your_file.xlsx", dry_run=True)
+result = processor.process_excel_file("your_file.xlsx")
 ```
 
 ### Qwen模型选择
@@ -240,6 +240,7 @@ LLM多模态处理: ✅ (openai)
 - 日期：2025年11月
 - 备注：数据截止到本月月底
 ```
+```
 
 ## 🎯 应用场景
 
@@ -273,7 +274,7 @@ LLM多模态处理: ✅ (openai)
 ### 1. API使用优化
 - 启用结果缓存避免重复调用
 - 设置合适的max_tokens_per_image限制
-- 使用dry_run模式测试配置
+- 测试配置并运行处理
 
 ### 2. 图片处理优化
 - 压缩大图片减小token消耗
@@ -328,24 +329,3 @@ LLM多模态处理: ✅ (openai)
 | 简单文本 | 快 | 快 | 相当 |
 | 图片文档 | 快 | 中等 | LLM稍慢但精度高 |
 | 混合文档 | 中等 | 中等 | 相当 |
-
-## 🔮 未来扩展
-
-### 1. 更多模型支持
-- 集成Google Gemini Vision
-- 支持其他国内模型如文心一言等
-
-### 2. 智能预处理
-- 图片去噪和增强
-- 自动图片裁剪和旋转
-- 表格线检测和矫正
-
-### 3. 高级功能
-- 手写文字识别
-- 多语言混合识别
-- 图表类型自动分类
-
----
-
-*Excel链接内容提取器 - LLM增强版 v2.0.0*  
-*采用先进的多模态大模型技术，提供企业级文档处理解决方案*

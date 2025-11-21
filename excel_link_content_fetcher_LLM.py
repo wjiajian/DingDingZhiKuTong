@@ -4,7 +4,7 @@ Excel链接内容提取器 - LLM增强版
 
 基于Unstructured和多模态大模型的增强型Excel超链接文档内容提取工具，支持30+种文档格式，
 通过LLM高精度的图片内容识别，替代低精度的传统OCR识别。
-具备备份机制、错误恢复、性能优化等企业级特性。
+具备错误恢复、性能优化等企业级特性。
 """
 
 import os
@@ -32,14 +32,13 @@ except ImportError:
     UNSTRUCTURED_AVAILABLE = False
     partition = None
 
-# 1. 屏蔽 pdfminer 的字体警告 (设置为只显示 ERROR 级别)
+# 1. 屏蔽 pdfminer 的字体警告
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
-# 2. 屏蔽 huggingface 的下载警告
+# 2. 屏蔽 huggingface 的下载警告和超时设置
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 # ==================== LLM多模态配置和数据结构 ====================
-
 
 @dataclass
 class MultimodalConfig:
@@ -48,7 +47,7 @@ class MultimodalConfig:
     # LLM模型配置
     vision_model_provider: str = "openai"  # openai, qwen
     vision_model_name: str = (
-        "gpt-4-vision-preview"  # 或 "qwen-vl-plus" (通过OpenAI兼容方式调用)
+        "gpt-4-vision-preview"  # 或 "qwen-vl-flash" (通过OpenAI兼容方式调用)
     )
     api_key: Optional[str] = None
     api_base: Optional[str] = None
@@ -111,10 +110,14 @@ class DocumentContent:
 class DocumentProcessingConfig:
     """文档处理配置"""
 
-    # Unstructured配置
-    partition_strategy: str = "hi_res"  # hi_res, fast, ocr_only
+    partition_strategy: str = "fast"  # hi_res, fast, ocr_only
     model_name: Optional[str] = None
     languages: List[str] = field(default_factory=lambda: ["zh", "en"])
+
+    # 网络配置
+    offline_mode: bool = False  # 是否使用离线模式
+    max_download_retries: int = 5  # 最大重试次数
+    download_timeout: int = 60  # 下载超时时间（秒）
 
     # 输出配置
     output_format: str = "markdown"  # markdown, plain_text, json
@@ -122,8 +125,8 @@ class DocumentProcessingConfig:
     include_metadata: bool = True
 
     # 安全配置
-    backup_enabled: bool = True
-    backup_location: str = "./backup/"
+    # backup_enabled: bool = True
+    # backup_location: str = "./backup/"
     continue_on_error: bool = True
     max_retries: int = 3
 
@@ -249,10 +252,6 @@ class MultimodalProcessor:
                 images = self._extract_pdf_images(file_path)
             elif extension in [".docx", ".pptx"]:
                 images = self._extract_office_images(file_path, extension)
-            elif extension == ".html":
-                images = self._extract_html_images(file_path)
-            elif extension == ".epub":
-                images = self._extract_epub_images(file_path)
 
         except Exception as e:
             self.logger.error(f"提取嵌入图片失败: {e}")
@@ -367,93 +366,6 @@ class MultimodalProcessor:
 
         return images
 
-    def _extract_html_images(self, html_path: str) -> List[Dict[str, Any]]:
-        """提取HTML中的图片"""
-        try:
-            from bs4 import BeautifulSoup
-
-            images = []
-            with open(html_path, "r", encoding="utf-8") as f:
-                soup = BeautifulSoup(f.read(), "html.parser")
-
-            # 处理<img>标签
-            for i, img in enumerate(soup.find_all("img")):
-                src = img.get("src")
-                alt = img.get("alt", "")
-                if src:
-                    if src.startswith(("http://", "https://")):
-                        # 网络图片，需要下载
-                        temp_path = f"{html_path}_web_img_{i}.jpg"
-                        images.append(
-                            {
-                                "source_path": temp_path,
-                                "alt_text": alt,
-                                "type": "html_web_image",
-                                "url": src,
-                            }
-                        )
-                    elif os.path.isfile(src):
-                        # 本地图片文件
-                        images.append(
-                            {
-                                "source_path": os.path.abspath(src),
-                                "alt_text": alt,
-                                "type": "html_local_image",
-                            }
-                        )
-
-            return images
-
-        except ImportError:
-            self.logger.warning("未安装BeautifulSoup4，跳过HTML图片提取")
-            return []
-        except Exception as e:
-            self.logger.error(f"HTML图片提取失败: {e}")
-            return []
-
-    def _extract_epub_images(self, epub_path: str) -> List[Dict[str, Any]]:
-        """提取EPUB电子书中的图片"""
-        try:
-            import zipfile
-            import xml.etree.ElementTree as ET
-
-            images = []
-
-            with zipfile.ZipFile(epub_path, "r") as epub:
-                # 获取图片文件列表
-                image_files = [
-                    f
-                    for f in epub.namelist()
-                    if f.startswith("OEBPS/images/") or f.startswith("images/")
-                ]
-
-                for i, img_file in enumerate(image_files):
-                    try:
-                        # 提取图片到临时文件
-                        temp_path = f"{epub_path}_epub_img_{i}.png"
-                        with (
-                            epub.open(img_file) as source,
-                            open(temp_path, "wb") as target,
-                        ):
-                            target.write(source.read())
-
-                        images.append(
-                            {
-                                "source_path": temp_path,
-                                "alt_text": f"EPUB图片 {i + 1}",
-                                "type": "epub_embedded",
-                                "source_in_epub": img_file,
-                            }
-                        )
-                    except Exception as e:
-                        self.logger.warning(f"提取EPUB图片失败: {e}")
-
-            return images
-
-        except Exception as e:
-            self.logger.error(f"EPUB图片提取失败: {e}")
-            return []
-
     def _extract_external_images(self, file_path: str) -> List[Dict[str, Any]]:
         """提取外部引用的图片（截图、附件等）"""
         # 这里可以扩展处理外部图片文件
@@ -494,7 +406,7 @@ class MultimodalProcessor:
             return f"[图片处理失败: {str(e)}]"
 
     def _process_with_openai_vision(self, image_path: str) -> str:
-        """使用OpenAI GPT-4V处理图片"""
+        """使用OpenAI兼容的大模型处理图片"""
         try:
             from openai import OpenAI
 
@@ -617,6 +529,55 @@ class UnifiedDocumentProcessor:
         else:
             self.multimodal_processor = None
 
+        # 预下载模型（如果需要）
+        if not self.config.offline_mode:
+            self._preload_models()
+
+    def _preload_models(self):
+        """预下载必要的模型文件，避免运行时下载超时"""
+        try:
+            if self.config.partition_strategy == "hi_res":
+                self.logger.info("预下载hi_res策略所需的模型文件...")
+                self._download_yolo_models()
+            elif self.config.partition_strategy == "fast":
+                self.logger.info("使用fast策略，跳过模型预下载")
+        except Exception as e:
+            self.logger.warning(f"模型预下载失败: {e}")
+
+    def _download_yolo_models(self):
+        """下载YOLO模型文件"""
+        try:
+            from huggingface_hub import hf_hub_download
+            import subprocess
+
+            # 模型文件列表
+            model_files = [
+                {
+                    "repo_id": "unstructuredio/yolo_x_layout",
+                    "filename": "yolox_l0.05.onnx",
+                    "local_dir": "~/.cache/unstructured",
+                }
+            ]
+
+            for model in model_files:
+                try:
+                    self.logger.info(f"正在下载模型: {model['filename']}")
+                    hf_hub_download(
+                        repo_id=model["repo_id"],
+                        filename=model["filename"],
+                        cache_dir=model["local_dir"],
+                        resume_download=True,
+                        timeout=self.config.download_timeout,
+                    )
+                    self.logger.info(f"模型下载完成: {model['filename']}")
+                except Exception as e:
+                    self.logger.warning(f"模型 {model['filename']} 下载失败: {e}")
+
+        except ImportError:
+            self.logger.warning("未安装huggingface_hub，跳过模型预下载")
+        except Exception as e:
+            self.logger.error(f"模型预下载过程出错: {e}")
+
     def _build_partition_options(self) -> Dict[str, Any]:
         """构建Unstructured分区选项"""
         options = {
@@ -708,35 +669,340 @@ class UnifiedDocumentProcessor:
             full_text="\n".join([s["content"] for s in content_sections]),
         )
 
+    @staticmethod
+    def _safe_get_metadata_value(metadata, key, default=None):
+        """安全获取metadata值，支持字典和ElementMetadata对象"""
+        if hasattr(metadata, "get"):
+            # 如果是字典类型
+            return metadata.get(key, default)
+        elif hasattr(metadata, key):
+            # 如果是ElementMetadata对象类型
+            return getattr(metadata, key, default)
+        else:
+            # 如果metadata不是对象也不是字典
+            return default
+
+    @staticmethod
+    def _safe_get_section_metadata(section, key, default=None):
+        """安全获取section的metadata值"""
+        metadata = section.get("metadata", {})
+        return UnifiedDocumentProcessor._safe_get_metadata_value(metadata, key, default)
+
+    def _find_optimal_insert_position(self, sections):
+        """找到最佳的图片内容插入位置"""
+        if not sections:
+            return 0
+
+        # 在文档的前1/3位置插入，或在第一个非文本section之后
+        optimal_position = min(len(sections) // 3, len(sections) - 1)
+
+        # 如果前面有标题或目录，跳过
+        for i, section in enumerate(sections[:optimal_position]):
+            content = section.get("content", "").lower()
+            title_keywords = [
+                "目录",
+                "contents",
+                "目录",
+                "index",
+                "索引",
+                "summary",
+                "概述",
+                "摘要",
+            ]
+
+            if any(keyword in content for keyword in title_keywords):
+                optimal_position = i + 1
+                break
+
+        # 确保不在文档末尾
+        if optimal_position >= len(sections):
+            optimal_position = len(sections) - 1
+
+        return max(1, optimal_position)  # 确保至少在第2个位置
+
+    def _rebuild_full_text(self, doc_content):
+        """重新构建完整文本，确保LLM内容不在最后面"""
+        all_sections_text = []
+
+        for i, section in enumerate(doc_content.sections):
+            if section.get("content"):
+                # 为图片内容添加标识
+                if section.get("type") == "image_content" and section.get(
+                    "metadata", {}
+                ).get("llm_processed"):
+                    # LLM增强的图片内容，特殊处理
+                    content = section["content"]
+                    # 移除重复的标题（因为content已经包含标题）
+                    if content.startswith("\n## 图片内容识别结果"):
+                        content = content.replace(
+                            "\n## 图片内容识别结果", "", 1
+                        ).strip()
+
+                    all_sections_text.append(
+                        f"\n## 图片内容识别 (LLM增强)\n\n{content}"
+                    )
+                else:
+                    # 普通内容
+                    all_sections_text.append(section["content"])
+
+        # 如果有LLM内容，确保它们不在文档末尾
+        llm_sections = [
+            s
+            for s in doc_content.sections
+            if s.get("metadata", {}).get("llm_processed")
+        ]
+        if llm_sections and len(all_sections_text) > 1:
+            # 将最后的LLM内容移到中间位置
+            non_llm_sections = [
+                text
+                for text in all_sections_text
+                if not text.startswith("\n## 图片内容识别")
+            ]
+
+            if non_llm_sections:
+                # 在非LLM内容的1/3处插入LLM内容
+                insert_pos = len(non_llm_sections) // 3
+                remaining_llm = [
+                    text
+                    for text in all_sections_text
+                    if text.startswith("\n## 图片内容识别")
+                ]
+
+                final_sections = (
+                    non_llm_sections[:insert_pos]
+                    + remaining_llm
+                    + non_llm_sections[insert_pos:]
+                )
+                doc_content.full_text = "\n\n".join(final_sections)
+            else:
+                doc_content.full_text = "\n\n".join(all_sections_text)
+        else:
+            doc_content.full_text = "\n\n".join(all_sections_text)
+
     def _merge_image_content(
         self, doc_content: DocumentContent, image_contents: List[ImageContentInfo]
     ) -> DocumentContent:
-        """合并图片内容到文档内容中"""
+        """合并图片内容到文档内容中，替换低质量的OCR结果"""
         try:
-            # 为每个处理过的图片添加内容段落
-            for img_info in image_contents:
-                if img_info.processed_content:
-                    img_section = {
-                        "type": "image_content",
-                        "content": f"\n## 图片内容识别结果 (ID: {img_info.image_id})\n\n{img_info.processed_content}",
-                        "metadata": {
-                            "image_id": img_info.image_id,
-                            "alt_text": img_info.alt_text,
-                            "extraction_type": img_info.extraction_type,
-                            "source_path": img_info.source_path,
-                            "llm_processed": True,
-                        },
-                    }
-                    doc_content.sections.append(img_section)
+            # 检查是否需要替换现有的图片内容
+            image_sections_to_replace = []
+            original_image_contents = []  # 收集原始图片内容用于替换
 
-            # 更新完整文本
-            image_texts = [
-                section["content"]
-                for section in doc_content.sections
-                if section["type"] == "image_content"
-            ]
-            if image_texts:
-                doc_content.full_text += "\n" + "\n".join(image_texts)
+            self.logger.info(
+                f"检查 {len(doc_content.sections)} 个sections以识别图片内容"
+            )
+
+            for i, section in enumerate(doc_content.sections):
+                section_type = section.get("type", "")
+                section_content = section.get("content", "")
+                section_metadata = section.get("metadata", {})
+
+                # 更宽松的识别条件
+                is_image_section = False
+
+                # 1. 检查section类型
+                if section_type in [
+                    "image",
+                    "figure",
+                    "picture",
+                    "image_content",
+                    "Image",
+                    "Figure",
+                ]:
+                    is_image_section = True
+                    self.logger.debug(f"Section {i}: 类型匹配 - {section_type}")
+
+                # 2. 检查content是否包含图片相关关键词
+                elif any(
+                    keyword in section_content.lower()
+                    for keyword in [
+                        "image",
+                        "图片",
+                        "figure",
+                        "图",
+                        "picture",
+                        "photo",
+                        "photo",
+                        "截图",
+                        "图表",
+                    ]
+                ):
+                    is_image_section = True
+                    self.logger.debug(
+                        f"Section {i}: 内容关键词匹配 - {section_content[:50]}..."
+                    )
+
+                # 3. 检查metadata
+                elif (
+                    self._safe_get_section_metadata(section, "element_type")
+                    in ["Image", "image"]
+                    or self._safe_get_section_metadata(section, "category")
+                    in ["Image", "image"]
+                    or self._safe_get_section_metadata(section, "type")
+                    in ["Image", "image"]
+                ):
+                    is_image_section = True
+                    self.logger.debug(f"Section {i}: metadata匹配")
+
+                # 4. 检查是否是可能的OCR错误识别内容
+                elif (
+                    len(section_content) < 50  # 内容较短，可能是OCR结果
+                    and any(
+                        ocr_indicator in section_content.lower()
+                        for ocr_indicator in [
+                            "unstructured",
+                            "image",
+                            "图",
+                            "页",
+                            "page",
+                            "element",
+                        ]
+                    )
+                ):
+                    is_image_section = True
+                    self.logger.debug(
+                        f"Section {i}: OCR内容特征匹配 - {section_content}"
+                    )
+
+                # 5. 特别检查：如果是第一个非文本section，也认为是图片内容
+                elif (
+                    i > 0
+                    and section_type == "text"
+                    and len(section_content) < 100
+                    and not any(char.isdigit() for char in section_content)  # 没有数字
+                    and section_content.strip()  # 非空
+                    and doc_content.sections[max(0, i - 1)].get("type") == "text"
+                ):  # 前面也是文本
+                    is_image_section = True
+                    self.logger.debug(f"Section {i}: 特殊模式识别 - 可能是图片内容")
+
+                # 6. 如果content很长且包含图片相关描述
+                elif len(section_content) < 200 and any(
+                    desc in section_content.lower()
+                    for desc in [
+                        "包含",
+                        "contains",
+                        "显示",
+                        "shows",
+                        "描述",
+                        "describes",
+                        "截图",
+                        "screenshot",
+                    ]
+                ):
+                    is_image_section = True
+                    self.logger.debug(f"Section {i}: 描述性内容匹配")
+
+                # 记录识别结果
+                if is_image_section:
+                    image_sections_to_replace.append(i)
+                    original_image_contents.append(section)
+                    self.logger.info(f"识别为图片内容: Section {i} - {section_type}")
+
+            self.logger.info(
+                f"总共识别到 {len(image_sections_to_replace)} 个图片内容sections"
+            )
+
+            # 如果有LLM图片内容，不管是否识别到原始图片内容，都要进行替换或插入
+            if image_contents:
+                self.logger.info(
+                    f"发现 {len(image_sections_to_replace)} 个低质量图片内容，将用LLM结果替换"
+                )
+
+                # 创建新的sections列表，逐步替换
+                new_sections = []
+                current_image_index = 0
+
+                for i, section in enumerate(doc_content.sections):
+                    if i in image_sections_to_replace and current_image_index < len(
+                        image_contents
+                    ):
+                        # 替换为LLM识别的高质量内容
+                        img_info = image_contents[current_image_index]
+                        if img_info.processed_content:
+                            img_section = {
+                                "type": "image_content",
+                                "content": f"\n## 图片内容识别结果\n\n{img_info.processed_content}",
+                                "metadata": {
+                                    "image_id": img_info.image_id,
+                                    "alt_text": img_info.alt_text,
+                                    "extraction_type": img_info.extraction_type,
+                                    "source_path": img_info.source_path,
+                                    "llm_processed": True,
+                                    "replaced_original": True,
+                                },
+                            }
+                            new_sections.append(img_section)
+                            current_image_index += 1
+                        else:
+                            # 如果LLM处理失败，保留原始内容
+                            new_sections.append(section)
+                    else:
+                        # 非图片内容或多余的图片内容
+                        new_sections.append(section)
+
+                # 添加剩余的LLM识别结果（如果没有足够的原始图片内容可替换）
+                while current_image_index < len(image_contents):
+                    img_info = image_contents[current_image_index]
+                    if img_info.processed_content:
+                        img_section = {
+                            "type": "image_content",
+                            "content": f"\n## 图片内容识别结果 (ID: {img_info.image_id})\n\n{img_info.processed_content}",
+                            "metadata": {
+                                "image_id": img_info.image_id,
+                                "alt_text": img_info.alt_text,
+                                "extraction_type": img_info.extraction_type,
+                                "source_path": img_info.source_path,
+                                "llm_processed": True,
+                                "replaced_original": False,
+                            },
+                        }
+                        new_sections.append(img_section)
+                    current_image_index += 1
+
+                doc_content.sections = new_sections
+
+            else:
+                # 如果没有找到需要替换的内容，智能插入到合适位置而不是末尾
+                self.logger.info("未找到可替换的图片内容，将智能插入LLM结果")
+
+                # 尝试在文档中间合适位置插入第一个LLM图片内容
+                insert_position = self._find_optimal_insert_position(
+                    doc_content.sections
+                )
+
+                for img_info in image_contents:
+                    if img_info.processed_content:
+                        img_section = {
+                            "type": "image_content",
+                            "content": f"\n## 图片内容识别结果\n\n{img_info.processed_content}",
+                            "metadata": {
+                                "image_id": img_info.image_id,
+                                "alt_text": img_info.alt_text,
+                                "extraction_type": img_info.extraction_type,
+                                "source_path": img_info.source_path,
+                                "llm_processed": True,
+                                "inserted_position": insert_position,
+                            },
+                        }
+
+                        # 插入到合适位置而不是末尾
+                        if insert_position < len(doc_content.sections):
+                            doc_content.sections.insert(insert_position, img_section)
+                        else:
+                            # 如果插入位置超出范围，添加到倒数第二个位置
+                            if len(doc_content.sections) > 1:
+                                doc_content.sections.insert(-1, img_section)
+                            else:
+                                # 如果只有1个section，插入到第一个位置
+                                doc_content.sections.insert(0, img_section)
+
+                        insert_position += 1  # 下一个插入位置
+
+                self.logger.info(f"已智能插入 {len(image_contents)} 个LLM图片内容")
+
+            # 重新构建完整文本，保持正确的顺序
+            self._rebuild_full_text(doc_content)
 
             # 更新元数据
             doc_content.metadata["image_count"] = len(image_contents)
@@ -746,6 +1012,21 @@ class UnifiedDocumentProcessor:
                 if self.config.multimodal_config
                 else None
             )
+
+            if image_sections_to_replace:
+                # 替换模式
+                doc_content.metadata["replaced_image_sections"] = len(
+                    image_sections_to_replace
+                )
+                doc_content.metadata["original_image_sections_kept"] = len(
+                    image_contents
+                ) - min(len(image_contents), len(image_sections_to_replace))
+                doc_content.metadata["processing_mode"] = "replace"
+            else:
+                # 插入模式
+                doc_content.metadata["replaced_image_sections"] = 0
+                doc_content.metadata["inserted_image_sections"] = len(image_contents)
+                doc_content.metadata["processing_mode"] = "insert"
 
             # 清理临时文件
             if hasattr(self, "multimodal_processor"):
@@ -852,88 +1133,6 @@ class UnifiedDocumentProcessor:
             return [".txt", ".md", ".csv", ".json"]
 
 
-# ==================== 备份管理模块 ====================
-
-
-class BackupManager:
-    """文件备份管理器"""
-
-    def __init__(self, backup_dir: str = "./backup/"):
-        self.backup_dir = backup_dir
-        Path(backup_dir).mkdir(parents=True, exist_ok=True)
-        self.logger = logging.getLogger(__name__)
-
-    def create_backup(self, file_path: str) -> str:
-        """
-        创建文件备份
-
-        Args:
-            file_path: 原始文件路径
-
-        Returns:
-            str: 备份文件路径
-        """
-        try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            file_name = Path(file_path).name
-            backup_name = f"{timestamp}_{file_name}"
-            backup_path = Path(self.backup_dir) / backup_name
-
-            # 优先使用硬链接（节省空间）
-            try:
-                os.link(file_path, str(backup_path))
-                self.logger.info(f"创建硬链接备份: {backup_path}")
-            except (OSError, AttributeError):
-                # 跨平台兼容的回退方案
-                shutil.copy2(file_path, str(backup_path))
-                self.logger.info(f"创建文件备份: {backup_path}")
-
-            return str(backup_path)
-
-        except Exception as e:
-            self.logger.error(f"创建备份失败 {file_path}: {e}")
-            raise
-
-    def cleanup_old_backups(self, days_to_keep: int = 30):
-        """清理旧备份文件"""
-        cutoff_time = time.time() - (days_to_keep * 24 * 60 * 60)
-        cleaned_count = 0
-
-        for backup_file in Path(self.backup_dir).glob("*"):
-            try:
-                if backup_file.stat().st_mtime < cutoff_time:
-                    backup_file.unlink()
-                    cleaned_count += 1
-            except OSError as e:
-                self.logger.warning(f"删除备份文件失败 {backup_file}: {e}")
-
-        self.logger.info(f"清理了 {cleaned_count} 个旧备份文件")
-        return cleaned_count
-
-    def restore_backup(self, backup_path: str, original_path: str) -> bool:
-        """
-        从备份恢复文件
-
-        Args:
-            backup_path: 备份文件路径
-            original_path: 原始文件路径
-
-        Returns:
-            bool: 恢复是否成功
-        """
-        try:
-            if os.path.exists(backup_path):
-                shutil.copy2(backup_path, original_path)
-                self.logger.info(f"从备份恢复文件: {original_path}")
-                return True
-            else:
-                self.logger.error(f"备份文件不存在: {backup_path}")
-                return False
-        except Exception as e:
-            self.logger.error(f"恢复文件失败 {backup_path} -> {original_path}: {e}")
-            return False
-
-
 # ==================== Excel处理模块 ====================
 
 
@@ -1033,7 +1232,7 @@ class ContentFormatter:
                 markdown_parts.append("注意: 使用回退方案处理")
             if doc_content.metadata.get("llm_multimodal_processed"):
                 markdown_parts.append(
-                    f"LLM多模态处理: ✅ ({doc_content.metadata.get('multimodal_provider', 'unknown')})"
+                    f"LLM多模态处理: OK ({doc_content.metadata.get('multimodal_provider', 'unknown')})"
                 )
                 if "image_count" in doc_content.metadata:
                     markdown_parts.append(
@@ -1055,8 +1254,29 @@ class ContentFormatter:
             # 添加类型标识（如果内容不为空）
             if content.strip():
                 section_type = section.get("type", "text")
+                section_metadata = section.get("metadata", {})
+
+                def _safe_check(metadata, key):
+                    """安全检查metadata中的布尔值"""
+                    if hasattr(metadata, "get"):
+                        return metadata.get(key, False)
+                    elif hasattr(metadata, key):
+                        return getattr(metadata, key, False)
+                    else:
+                        return False
+
                 if section_type == "image_content":
-                    markdown_parts.append(f"### 图片内容识别\n\n{content}\n")
+                    if _safe_check(section_metadata, "llm_processed"):
+                        if _safe_check(section_metadata, "replaced_original"):
+                            markdown_parts.append(
+                                f"### 图片内容识别 (LLM增强 - 已替换)\n\n{content}\n"
+                            )
+                        else:
+                            markdown_parts.append(
+                                f"### 图片内容识别 (LLM增强)\n\n{content}\n"
+                            )
+                    else:
+                        markdown_parts.append(f"### 图片内容识别\n\n{content}\n")
                 else:
                     markdown_parts.append(f"```\n{content}\n```")
 
@@ -1074,7 +1294,7 @@ class EnhancedExcelProcessorLLM:
 
     def __init__(self, config: Optional[DocumentProcessingConfig] = None):
         self.config = config or DocumentProcessingConfig()
-        self.backup_manager = BackupManager(self.config.backup_location)
+
         self.document_processor = UnifiedDocumentProcessor(self.config)
         self.content_formatter = ContentFormatter(self.config)
         self.excel_processor = ExcelLinkProcessor(self.document_processor)
@@ -1092,15 +1312,12 @@ class EnhancedExcelProcessorLLM:
 
         self.logger.info("LLM增强版Excel处理器初始化完成")
 
-    def process_excel_file(
-        self, excel_path: str, dry_run: bool = False
-    ) -> Dict[str, Any]:
+    def process_excel_file(self, excel_path: str) -> Dict[str, Any]:
         """
         处理Excel文件中的链接文档，支持LLM多模态增强
 
         Args:
             excel_path: Excel文件路径
-            dry_run: 是否为演练模式
 
         Returns:
             Dict: 处理结果
@@ -1108,12 +1325,10 @@ class EnhancedExcelProcessorLLM:
         results = {
             "file_path": excel_path,
             "processed_at": datetime.now().isoformat(),
-            "dry_run": dry_run,
             "total_links": 0,
             "successful": 0,
             "failed": 0,
             "errors": [],
-            "backup_path": None,
             "multimodal_processed": False,
         }
 
@@ -1132,25 +1347,17 @@ class EnhancedExcelProcessorLLM:
                 self.logger.info(f"Excel文件 '{excel_path}' 中未找到超链接")
                 return results
 
-            # 3. 创建备份
-            backup_path = None
-            if not dry_run and self.config.backup_enabled:
-                backup_path = self.backup_manager.create_backup(excel_path)
-                results["backup_path"] = backup_path
-                self.logger.info(f"已创建备份: {backup_path}")
-
             # 4. 设置目标列
             first_link_col = links[0].cell.column
             content_col = first_link_col + 1
 
-            if not dry_run:
-                sheet.insert_cols(content_col)
+            sheet.insert_cols(content_col)
 
-                # 设置标题
-                header_cell = sheet.cell(row=1, column=content_col)
-                header_cell.value = "链接文档内容 (LLM增强)"
-                header_cell.font = Font(bold=True)
-                self.logger.info(f"在第 {get_column_letter(content_col)} 列插入内容列")
+            # 设置标题
+            header_cell = sheet.cell(row=1, column=content_col)
+            header_cell.value = "链接文档内容 (LLM增强)"
+            header_cell.font = Font(bold=True)
+            self.logger.info(f"在第 {get_column_letter(content_col)} 列插入内容列")
 
             # 5. 处理每个链接
             for link_info in links:
@@ -1176,14 +1383,13 @@ class EnhancedExcelProcessorLLM:
                     )
 
                     # 更新Excel单元格
-                    if not dry_run:
-                        content_cell = sheet.cell(
-                            row=link_info.cell.row, column=content_col
-                        )
-                        content_cell.value = formatted_content
+                    content_cell = sheet.cell(
+                        row=link_info.cell.row, column=content_col
+                    )
+                    content_cell.value = formatted_content
 
                     results["successful"] += 1
-                    self.logger.info(f"✅ 处理完成: {link_info.target}")
+                    self.logger.info(f"处理完成: {link_info.target}")
 
                 except Exception as e:
                     error_msg = f"处理链接 '{link_info.target}' 失败: {str(e)}"
@@ -1196,26 +1402,13 @@ class EnhancedExcelProcessorLLM:
                         break
 
             # 6. 保存文件
-            if not dry_run:
-                workbook.save(excel_path)
-                self.logger.info(f"Excel文件已更新: {excel_path}")
-
-                # 删除备份（处理成功）
-                if backup_path and os.path.exists(backup_path):
-                    os.remove(backup_path)
-                    self.logger.info(f"删除备份文件: {backup_path}")
+            workbook.save(excel_path)
+            self.logger.info(f"Excel文件已更新: {excel_path}")
 
         except Exception as e:
             error_msg = f"Excel文件处理失败: {str(e)}"
             results["errors"].append(error_msg)
             self.logger.error(error_msg)
-
-            # 恢复备份
-            if results["backup_path"] and os.path.exists(results["backup_path"]):
-                if self.backup_manager.restore_backup(
-                    results["backup_path"], excel_path
-                ):
-                    self.logger.info(f"文件已从备份恢复: {excel_path}")
 
         finally:
             if workbook:
@@ -1271,136 +1464,6 @@ class EnhancedExcelProcessorLLM:
         """获取支持的文档格式列表"""
         return self.document_processor.get_supported_formats()
 
-    def validate_environment(self) -> Dict[str, Any]:
-        """验证运行环境"""
-        validation_results = {}
-
-        # 检查基础依赖
-        try:
-            import unstructured
-
-            validation_results["unstructured"] = True
-            validation_results["unstructured_version"] = getattr(
-                unstructured, "__version__", "unknown"
-            )
-        except ImportError:
-            validation_results["unstructured"] = False
-            validation_results["unstructured_version"] = None
-
-        try:
-            import openpyxl
-
-            validation_results["openpyxl"] = True
-            validation_results["openpyxl_version"] = getattr(
-                openpyxl, "__version__", "unknown"
-            )
-        except ImportError:
-            validation_results["openpyxl"] = False
-            validation_results["openpyxl_version"] = None
-
-        # 检查多模态依赖
-        try:
-            import openai
-
-            validation_results["openai"] = True
-            validation_results["openai_version"] = getattr(
-                openai, "__version__", "unknown"
-            )
-        except ImportError:
-            validation_results["openai"] = False
-            validation_results["openai_version"] = None
-
-        # 检查图片处理依赖
-        try:
-            import fitz  # PyMuPDF
-
-            validation_results["pymupdf"] = True
-        except ImportError:
-            validation_results["pymupdf"] = False
-
-        try:
-            from bs4 import BeautifulSoup
-
-            validation_results["beautifulsoup4"] = True
-        except ImportError:
-            validation_results["beautifulsoup4"] = False
-
-        # 检查备份目录
-        backup_dir = Path(self.config.backup_location)
-        try:
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            validation_results["backup_dir"] = True
-        except OSError:
-            validation_results["backup_dir"] = False
-
-        return validation_results
-
-    def print_environment_report(self):
-        """打印环境报告"""
-        print("=" * 70)
-        print("Excel链接内容提取器 - LLM增强版环境报告")
-        print("=" * 70)
-
-        validation = self.validate_environment()
-
-        print(
-            f"Unstructured库: {'✅ 已安装' if validation['unstructured'] else '❌ 未安装'}"
-        )
-        if validation.get("unstructured_version"):
-            print(f"  版本: {validation['unstructured_version']}")
-
-        print(f"OpenPyXL库: {'✅ 已安装' if validation['openpyxl'] else '❌ 未安装'}")
-        if validation.get("openpyxl_version"):
-            print(f"  版本: {validation['openpyxl_version']}")
-
-        print(f"OpenAI库: {'✅ 已安装' if validation['openai'] else '❌ 未安装'}")
-        if validation.get("openai_version"):
-            print(f"  版本: {validation['openai_version']}")
-
-        print(
-            f"PyMuPDF库: {'✅ 已安装' if validation['pymupdf'] else '❌ 未安装'} (PDF图片提取)"
-        )
-        print(
-            f"BeautifulSoup4: {'✅ 已安装' if validation['beautifulsoup4'] else '❌ 未安装'} (HTML图片提取)"
-        )
-
-        print(f"备份目录: {'✅ 可写' if validation['backup_dir'] else '❌ 不可写'}")
-        print(f"  位置: {self.config.backup_location}")
-
-        print(
-            f"\n多模态功能: {'✅ 已启用' if self.config.enable_multimodal else '❌ 未启用'}"
-        )
-        if self.config.enable_multimodal and self.config.multimodal_config:
-            provider = self.config.multimodal_config.vision_model_provider
-            print(f"  模型提供商: {provider}")
-            print(f"  模型名称: {self.config.multimodal_config.vision_model_name}")
-            print(
-                f"  图片OCR: {'✅ 启用' if self.config.multimodal_config.enable_vision_ocr else '❌ 禁用'}"
-            )
-
-        print("\n支持的文档格式:")
-        formats = self.get_supported_formats()
-        for i, fmt in enumerate(formats, 1):
-            print(f"  {i:2d}. {fmt}")
-
-        print("\n配置信息:")
-        print(f"  输出格式: {self.config.output_format}")
-        print(f"  分区策略: {self.config.partition_strategy}")
-        print(f"  备份启用: {self.config.backup_enabled}")
-        print(f"  并行处理: {self.config.enable_parallel_processing}")
-        print(f"  最大工作线程: {self.config.max_workers}")
-        print(f"  LLM多模态: {self.config.enable_multimodal}")
-
-        if not validation["unstructured"]:
-            print("\n⚠️  警告: 未安装unstructured库，将使用基础回退方案")
-            print("   建议安装: pip install unstructured[all-docs]")
-
-        if self.config.enable_multimodal and not validation.get("openai"):
-            print("\n⚠️  警告: 启用了多模态功能但未安装LLM库")
-            print("   建议安装: pip install openai")
-
-        print("=" * 70)
-
 
 # ==================== 便捷接口 ====================
 
@@ -1415,7 +1478,6 @@ def create_llm_processor(
 def process_excel_links_llm(
     excel_path: str,
     config: Optional[DocumentProcessingConfig] = None,
-    dry_run: bool = False,
 ) -> Dict[str, Any]:
     """
     处理Excel文件中链接的LLM增强版便捷函数
@@ -1423,13 +1485,12 @@ def process_excel_links_llm(
     Args:
         excel_path: Excel文件路径
         config: 处理配置
-        dry_run: 是否为演练模式
 
     Returns:
         Dict: 处理结果
     """
     processor = create_llm_processor(config)
-    return processor.process_excel_file(excel_path, dry_run)
+    return processor.process_excel_file(excel_path)
 
 
 # ==================== 使用示例 ====================
@@ -1455,7 +1516,6 @@ if __name__ == "__main__":
     # 2. 创建处理器配置
     config = DocumentProcessingConfig(
         output_format="markdown",
-        backup_enabled=True,
         enable_parallel_processing=False,  # 单文件处理设为False
         enable_multimodal=True,  # 启用LLM多模态功能
         multimodal_config=multimodal_config,
@@ -1464,54 +1524,20 @@ if __name__ == "__main__":
     # 3. 创建处理器
     processor = EnhancedExcelProcessorLLM(config)
 
-    # 4. 打印详细环境报告
-    processor.print_environment_report()
-
     # 5. 示例用法（需要修改为实际的Excel文件路径）
     excel_file = "C:\\Users\\Admin\\Desktop\\text\\任务管理.xlsx"
 
-    if os.path.exists(excel_file):
-        print(f"\n开始处理Excel文件: {excel_file}")
-        print("=" * 60)
+    print(f"\n开始处理Excel文件: {excel_file}")
+    print("=" * 60)
 
-        # 首先进行演练
-        print("🔍 执行演练模式...")
-        result = processor.process_excel_file(excel_file, dry_run=True)
-        print(f"演练结果:")
-        print(f"  ✅ 成功处理: {result['successful']} 个链接")
-        print(f"  ❌ 处理失败: {result['failed']} 个链接")
-        print(f"  🖼️  LLM多模态处理: {'是' if result['multimodal_processed'] else '否'}")
+    print("开始实际处理...")
+    result = processor.process_excel_file(excel_file)
+    print(f"处理结果:")
+    print(f"成功处理: {result['successful']} 个链接")
+    print(f"处理失败: {result['failed']} 个链接")
+    print(f"LLM多模态处理: {'是' if result['multimodal_processed'] else '否'}")
 
-        if result["errors"]:
-            print(f"  ⚠️  错误信息:")
-            for error in result["errors"]:
-                print(f"    - {error}")
-
-        # 如果演练成功，执行实际处理
-        if result["successful"] > 0:
-            print("\n🚀 演练成功，开始实际处理...")
-            final_result = processor.process_excel_file(excel_file, dry_run=False)
-            print(f"实际处理结果:")
-            print(f"  ✅ 成功处理: {final_result['successful']} 个链接")
-            print(f"  ❌ 处理失败: {final_result['failed']} 个链接")
-            print(
-                f"  🖼️  LLM多模态处理: {'是' if final_result['multimodal_processed'] else '否'}"
-            )
-            print(f"  📁 备份文件: {final_result.get('backup_path', '无')}")
-        else:
-            print("\n❌ 演练失败，未能处理任何链接")
-    else:
-        print("💡 使用示例:")
-        print("  python excel_link_content_fetcher_LLM.py")
-        print()
-        print("📝 配置说明:")
-        print("  1. 在代码中设置您的Excel文件路径")
-        print("  2. 配置您的LLM API密钥")
-        print("  3. 根据需要调整多模态处理参数")
-        print()
-        print("🔑 支持的API密钥:")
-        print("  - OpenAI: https://platform.openai.com/api-keys")
-        print("  - 通义千问(DashScope): https://dashscope.console.aliyun.com/")
-        print()
-        print("📦 需要的依赖:")
-        print("  pip install openai PyMuPDF beautifulsoup4")
+    if result["errors"]:
+        print(f"错误信息:")
+        for error in result["errors"]:
+            print(f"    - {error}")

@@ -65,9 +65,6 @@ class DocumentProcessingConfig:
     max_content_length: int = 10000
     include_metadata: bool = True
 
-    # 安全配置
-    backup_enabled: bool = True
-    backup_location: str = "./backup/"
     continue_on_error: bool = True
     max_retries: int = 3
 
@@ -285,85 +282,6 @@ class UnifiedDocumentProcessor:
 # ==================== 备份管理模块 ====================
 
 
-class BackupManager:
-    """文件备份管理器"""
-
-    def __init__(self, backup_dir: str = "./backup/"):
-        self.backup_dir = backup_dir
-        Path(backup_dir).mkdir(parents=True, exist_ok=True)
-        self.logger = logging.getLogger(__name__)
-
-    def create_backup(self, file_path: str) -> str:
-        """
-        创建文件备份
-
-        Args:
-            file_path: 原始文件路径
-
-        Returns:
-            str: 备份文件路径
-        """
-        try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            file_name = Path(file_path).name
-            backup_name = f"{timestamp}_{file_name}"
-            backup_path = Path(self.backup_dir) / backup_name
-
-            # 优先使用硬链接（节省空间）
-            try:
-                os.link(file_path, str(backup_path))
-                self.logger.info(f"创建硬链接备份: {backup_path}")
-            except (OSError, AttributeError):
-                # 跨平台兼容的回退方案
-                shutil.copy2(file_path, str(backup_path))
-                self.logger.info(f"创建文件备份: {backup_path}")
-
-            return str(backup_path)
-
-        except Exception as e:
-            self.logger.error(f"创建备份失败 {file_path}: {e}")
-            raise
-
-    def cleanup_old_backups(self, days_to_keep: int = 30):
-        """清理旧备份文件"""
-        cutoff_time = time.time() - (days_to_keep * 24 * 60 * 60)
-        cleaned_count = 0
-
-        for backup_file in Path(self.backup_dir).glob("*"):
-            try:
-                if backup_file.stat().st_mtime < cutoff_time:
-                    backup_file.unlink()
-                    cleaned_count += 1
-            except OSError as e:
-                self.logger.warning(f"删除备份文件失败 {backup_file}: {e}")
-
-        self.logger.info(f"清理了 {cleaned_count} 个旧备份文件")
-        return cleaned_count
-
-    def restore_backup(self, backup_path: str, original_path: str) -> bool:
-        """
-        从备份恢复文件
-
-        Args:
-            backup_path: 备份文件路径
-            original_path: 原始文件路径
-
-        Returns:
-            bool: 恢复是否成功
-        """
-        try:
-            if os.path.exists(backup_path):
-                shutil.copy2(backup_path, original_path)
-                self.logger.info(f"从备份恢复文件: {original_path}")
-                return True
-            else:
-                self.logger.error(f"备份文件不存在: {backup_path}")
-                return False
-        except Exception as e:
-            self.logger.error(f"恢复文件失败 {backup_path} -> {original_path}: {e}")
-            return False
-
-
 # ==================== Excel处理模块 ====================
 
 
@@ -492,7 +410,7 @@ class EnhancedExcelProcessor:
 
     def __init__(self, config: Optional[DocumentProcessingConfig] = None):
         self.config = config or DocumentProcessingConfig()
-        self.backup_manager = BackupManager(self.config.backup_location)
+
         self.document_processor = UnifiedDocumentProcessor(self.config)
         self.content_formatter = ContentFormatter(self.config)
         self.excel_processor = ExcelLinkProcessor(self.document_processor)
@@ -510,15 +428,12 @@ class EnhancedExcelProcessor:
 
         self.logger.info("Excel处理器初始化完成")
 
-    def process_excel_file(
-        self, excel_path: str, dry_run: bool = False
-    ) -> Dict[str, Any]:
+    def process_excel_file(self, excel_path: str) -> Dict[str, Any]:
         """
         处理Excel文件中的链接文档
 
         Args:
             excel_path: Excel文件路径
-            dry_run: 是否为演练模式
 
         Returns:
             Dict: 处理结果
@@ -526,12 +441,10 @@ class EnhancedExcelProcessor:
         results = {
             "file_path": excel_path,
             "processed_at": datetime.now().isoformat(),
-            "dry_run": dry_run,
             "total_links": 0,
             "successful": 0,
             "failed": 0,
             "errors": [],
-            "backup_path": None,
         }
 
         workbook = None
@@ -549,25 +462,17 @@ class EnhancedExcelProcessor:
                 self.logger.info(f"Excel文件 '{excel_path}' 中未找到超链接")
                 return results
 
-            # 3. 创建备份
-            backup_path = None
-            if not dry_run and self.config.backup_enabled:
-                backup_path = self.backup_manager.create_backup(excel_path)
-                results["backup_path"] = backup_path
-                self.logger.info(f"已创建备份: {backup_path}")
-
             # 4. 设置目标列
             first_link_col = links[0].cell.column
             content_col = first_link_col + 1
 
-            if not dry_run:
-                sheet.insert_cols(content_col)
+            sheet.insert_cols(content_col)
 
-                # 设置标题
-                header_cell = sheet.cell(row=1, column=content_col)
-                header_cell.value = "链接文档内容"
-                header_cell.font = Font(bold=True)
-                self.logger.info(f"在第 {get_column_letter(content_col)} 列插入内容列")
+            # 设置标题
+            header_cell = sheet.cell(row=1, column=content_col)
+            header_cell.value = "链接文档内容"
+            header_cell.font = Font(bold=True)
+            self.logger.info(f"在第 {get_column_letter(content_col)} 列插入内容列")
 
             # 5. 处理每个链接
             for link_info in links:
@@ -589,11 +494,10 @@ class EnhancedExcelProcessor:
                     )
 
                     # 更新Excel单元格
-                    if not dry_run:
-                        content_cell = sheet.cell(
-                            row=link_info.cell.row, column=content_col
-                        )
-                        content_cell.value = formatted_content
+                    content_cell = sheet.cell(
+                        row=link_info.cell.row, column=content_col
+                    )
+                    content_cell.value = formatted_content
 
                     results["successful"] += 1
                     self.logger.info(f"✅ 处理完成: {link_info.target}")
@@ -609,26 +513,13 @@ class EnhancedExcelProcessor:
                         break
 
             # 6. 保存文件
-            if not dry_run:
-                workbook.save(excel_path)
-                self.logger.info(f"Excel文件已更新: {excel_path}")
-
-                # 删除备份（处理成功）
-                if backup_path and os.path.exists(backup_path):
-                    os.remove(backup_path)
-                    self.logger.info(f"删除备份文件: {backup_path}")
+            workbook.save(excel_path)
+            self.logger.info(f"Excel文件已更新: {excel_path}")
 
         except Exception as e:
             error_msg = f"Excel文件处理失败: {str(e)}"
             results["errors"].append(error_msg)
             self.logger.error(error_msg)
-
-            # 恢复备份
-            if results["backup_path"] and os.path.exists(results["backup_path"]):
-                if self.backup_manager.restore_backup(
-                    results["backup_path"], excel_path
-                ):
-                    self.logger.info(f"文件已从备份恢复: {excel_path}")
 
         finally:
             if workbook:
@@ -684,83 +575,6 @@ class EnhancedExcelProcessor:
         """获取支持的文档格式列表"""
         return self.document_processor.get_supported_formats()
 
-    def validate_environment(self) -> Dict[str, bool]:
-        """验证运行环境"""
-        validation_results = {}
-
-        # 检查unstructured安装
-        try:
-            import unstructured
-
-            validation_results["unstructured"] = True
-            validation_results["unstructured_version"] = getattr(
-                unstructured, "__version__", "unknown"
-            )
-        except ImportError:
-            validation_results["unstructured"] = False
-            validation_results["unstructured_version"] = None
-
-        # 检查openpyxl安装
-        try:
-            import openpyxl
-
-            validation_results["openpyxl"] = True
-            validation_results["openpyxl_version"] = getattr(
-                openpyxl, "__version__", "unknown"
-            )
-        except ImportError:
-            validation_results["openpyxl"] = False
-            validation_results["openpyxl_version"] = None
-
-        # 检查备份目录
-        backup_dir = Path(self.config.backup_location)
-        try:
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            validation_results["backup_dir"] = True
-        except OSError:
-            validation_results["backup_dir"] = False
-
-        return validation_results
-
-    def print_environment_report(self):
-        """打印环境报告"""
-        print("=" * 60)
-        print("Excel链接内容提取器 - 环境报告")
-        print("=" * 60)
-
-        validation = self.validate_environment()
-
-        print(
-            f"Unstructured库: {'✅ 已安装' if validation['unstructured'] else '❌ 未安装'}"
-        )
-        if validation.get("unstructured_version"):
-            print(f"  版本: {validation['unstructured_version']}")
-
-        print(f"OpenPyXL库: {'✅ 已安装' if validation['openpyxl'] else '❌ 未安装'}")
-        if validation.get("openpyxl_version"):
-            print(f"  版本: {validation['openpyxl_version']}")
-
-        print(f"备份目录: {'✅ 可写' if validation['backup_dir'] else '❌ 不可写'}")
-        print(f"  位置: {self.config.backup_location}")
-
-        print("\n支持的文档格式:")
-        formats = self.get_supported_formats()
-        for i, fmt in enumerate(formats, 1):
-            print(f"  {i:2d}. {fmt}")
-
-        print("\n配置信息:")
-        print(f"  输出格式: {self.config.output_format}")
-        print(f"  分区策略: {self.config.partition_strategy}")
-        print(f"  备份启用: {self.config.backup_enabled}")
-        print(f"  并行处理: {self.config.enable_parallel_processing}")
-        print(f"  最大工作线程: {self.config.max_workers}")
-
-        if not validation["unstructured"]:
-            print("\n⚠️  警告: 未安装unstructured库，将使用基础回退方案")
-            print("   建议安装: pip install unstructured[all-docs]")
-
-        print("=" * 60)
-
 
 # ==================== 便捷接口 ====================
 
@@ -775,7 +589,6 @@ def create_processor(
 def process_excel_links(
     excel_path: str,
     config: Optional[DocumentProcessingConfig] = None,
-    dry_run: bool = False,
 ) -> Dict[str, Any]:
     """
     处理Excel文件中链接的便捷函数
@@ -783,13 +596,12 @@ def process_excel_links(
     Args:
         excel_path: Excel文件路径
         config: 处理配置
-        dry_run: 是否为演练模式
 
     Returns:
         Dict: 处理结果
     """
     processor = create_processor(config)
-    return processor.process_excel_file(excel_path, dry_run)
+    return processor.process_excel_file(excel_path)
 
 
 # ==================== 使用示例 ====================
@@ -802,29 +614,18 @@ if __name__ == "__main__":
     # 创建处理器
     config = DocumentProcessingConfig(
         output_format="markdown",
-        backup_enabled=True,
         enable_parallel_processing=False,  # 单文件处理设为False
     )
 
     processor = EnhancedExcelProcessor(config)
 
-    # 打印环境报告
-    processor.print_environment_report()
-
     # 示例用法（需要修改为实际的Excel文件路径）
     excel_file = "C:\\Users\\Admin\\Desktop\\text\\任务管理.xlsx"
-    #
+
     if os.path.exists(excel_file):
-         print(f"\n开始处理Excel文件: {excel_file}")
-    #
-    #     # 首先进行演练
-         result = processor.process_excel_file(excel_file, dry_run=True)
-         print(f"演练结果: 成功 {result['successful']}, 失败 {result['failed']}")
-    #
-         if result['successful'] > 0:
-             print("演练成功，执行实际处理...")
-             final_result = processor.process_excel_file(excel_file, dry_run=False)
-             print(f"处理完成: 成功 {final_result['successful']}, 失败 {final_result['failed']}")
+        print(f"\n开始处理Excel文件: {excel_file}")
+        result = processor.process_excel_file(excel_file)
+        print(f"处理完成: 成功 {result['successful']}, 失败 {result['failed']}")
     else:
-         print(f"示例: python {__file__}")
-         print("请在代码中设置实际的Excel文件路径进行测试")
+        print(f"示例: python {__file__}")
+        print("请在代码中设置实际的Excel文件路径进行测试")
