@@ -40,6 +40,7 @@ logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 # ==================== LLM多模态配置和数据结构 ====================
 
+
 @dataclass
 class MultimodalConfig:
     """多模态LLM处理配置"""
@@ -250,7 +251,7 @@ class MultimodalProcessor:
 
             if extension == ".pdf":
                 images = self._extract_pdf_images(file_path)
-            elif extension in [".docx", ".pptx"]:
+            elif extension in [".docx", ".pptx", ".xlsx"]:
                 images = self._extract_office_images(file_path, extension)
 
         except Exception as e:
@@ -311,55 +312,125 @@ class MultimodalProcessor:
                 # 使用python-docx提取图片
                 try:
                     from docx import Document
-                    from docx.document import Document as _Document
-                    from docx.oxml.table import CT_Tbl
-                    from docx.oxml.text.paragraph import CT_P
-                    from docx.table import _Cell, Table
-                    from docx.text.paragraph import Paragraph
+                    import zipfile
 
-                    doc = Document(file_path)
+                    # 方法1: 通过zipfile直接提取图片（更可靠）
+                    with zipfile.ZipFile(file_path, "r") as zip_ref:
+                        for file_info in zip_ref.namelist():
+                            if file_info.startswith("word/media/") and any(
+                                file_info.lower().endswith(ext)
+                                for ext in [".png", ".jpg", ".jpeg", ".gif", ".bmp"]
+                            ):
+                                try:
+                                    img_data = zip_ref.read(file_info)
+                                    img_name = os.path.basename(file_info)
+                                    temp_path = os.path.join(
+                                        tempfile.gettempdir(),
+                                        f"{os.path.basename(file_path)}_{img_name}",
+                                    )
+                                    with open(temp_path, "wb") as f:
+                                        f.write(img_data)
 
-                    # 遍历所有段落和表格中的图片
-                    for element in doc.element.body:
-                        if isinstance(element, CT_P):
-                            paragraph = Paragraph(element, doc)
-                            for run in paragraph.runs:
-                                for inline_shape in run._element.xpath(".//a:blip"):
-                                    # 这里需要更复杂的处理来提取实际图片
-                                    pass
+                                    images.append(
+                                        {
+                                            "source_path": temp_path,
+                                            "alt_text": f"Word图片 - {img_name}",
+                                            "type": "docx_embedded",
+                                        }
+                                    )
+                                except Exception as e:
+                                    self.logger.warning(
+                                        f"提取Word图片失败 {file_info}: {e}"
+                                    )
 
                 except ImportError:
                     self.logger.warning("未安装python-docx，跳过Word文档图片提取")
 
             elif extension == ".pptx":
-                # 使用python-pptx提取图片
+                # 使用zipfile直接提取图片（更可靠）
                 try:
-                    from pptx import Presentation
+                    import zipfile
 
-                    prs = Presentation(file_path)
-
-                    for slide_num, slide in enumerate(prs.slides):
-                        for shape in slide.shapes:
-                            if hasattr(shape, "image"):
+                    with zipfile.ZipFile(file_path, "r") as zip_ref:
+                        for file_info in zip_ref.namelist():
+                            if file_info.startswith("ppt/media/") and any(
+                                file_info.lower().endswith(ext)
+                                for ext in [
+                                    ".png",
+                                    ".jpg",
+                                    ".jpeg",
+                                    ".gif",
+                                    ".bmp",
+                                    ".tiff",
+                                ]
+                            ):
                                 try:
-                                    image = shape.image
-                                    temp_path = f"{file_path}_slide_{slide_num + 1}_img_{len(images)}.png"
-
+                                    img_data = zip_ref.read(file_info)
+                                    img_name = os.path.basename(file_info)
+                                    temp_path = os.path.join(
+                                        tempfile.gettempdir(),
+                                        f"{os.path.basename(file_path)}_{img_name}",
+                                    )
                                     with open(temp_path, "wb") as f:
-                                        f.write(image.blob)
+                                        f.write(img_data)
 
                                     images.append(
                                         {
                                             "source_path": temp_path,
-                                            "alt_text": f"PPT图片 - 幻灯片{slide_num + 1}",
+                                            "alt_text": f"PPT图片 - {img_name}",
                                             "type": "pptx_embedded",
                                         }
                                     )
                                 except Exception as e:
-                                    self.logger.warning(f"提取PPT图片失败: {e}")
+                                    self.logger.warning(
+                                        f"提取PPT图片失败 {file_info}: {e}"
+                                    )
 
-                except ImportError:
-                    self.logger.warning("未安装python-pptx，跳过PowerPoint文档图片提取")
+                except Exception as e:
+                    self.logger.error(f"PowerPoint文档图片提取失败: {e}")
+
+            elif extension == ".xlsx":
+                # 使用zipfile直接提取Excel图片
+                try:
+                    import zipfile
+
+                    with zipfile.ZipFile(file_path, "r") as zip_ref:
+                        for file_info in zip_ref.namelist():
+                            if file_info.startswith("xl/media/") and any(
+                                file_info.lower().endswith(ext)
+                                for ext in [
+                                    ".png",
+                                    ".jpg",
+                                    ".jpeg",
+                                    ".gif",
+                                    ".bmp",
+                                    ".tiff",
+                                ]
+                            ):
+                                try:
+                                    img_data = zip_ref.read(file_info)
+                                    img_name = os.path.basename(file_info)
+                                    temp_path = os.path.join(
+                                        tempfile.gettempdir(),
+                                        f"{os.path.basename(file_path)}_{img_name}",
+                                    )
+                                    with open(temp_path, "wb") as f:
+                                        f.write(img_data)
+
+                                    images.append(
+                                        {
+                                            "source_path": temp_path,
+                                            "alt_text": f"Excel图片 - {img_name}",
+                                            "type": "xlsx_embedded",
+                                        }
+                                    )
+                                except Exception as e:
+                                    self.logger.warning(
+                                        f"提取Excel图片失败 {file_info}: {e}"
+                                    )
+
+                except Exception as e:
+                    self.logger.error(f"Excel文档图片提取失败: {e}")
 
         except Exception as e:
             self.logger.error(f"Office文档图片提取失败: {e}")
