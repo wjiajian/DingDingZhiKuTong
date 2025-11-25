@@ -3,7 +3,7 @@
 Excel链接内容提取器 - LLM增强版
 
 基于Unstructured和多模态大模型的增强型Excel超链接文档内容提取工具，支持30+种文档格式，
-通过LLM高精度的图片内容识别，替代低精度的传统OCR识别。
+通过LLM高精度的图片内容识别和解析。
 具备错误恢复、性能优化等企业级特性。
 """
 
@@ -60,8 +60,6 @@ class MultimodalConfig:
     )
     extract_embedded_images: bool = True
 
-    # OCR替代配置
-    enable_vision_ocr: bool = True
     vision_prompt: str = "请详细识别和描述这张图片中的所有文本内容，包括标题、正文、表格、图表等，保持原有的格式和结构。如果是表格，请用markdown表格格式输出。"
 
     # 批处理配置
@@ -111,7 +109,7 @@ class DocumentContent:
 class DocumentProcessingConfig:
     """文档处理配置"""
 
-    partition_strategy: str = "fast"  # hi_res, fast, ocr_only
+    partition_strategy: str = "fast"  # hi_res, fast
     model_name: Optional[str] = None
     languages: List[str] = field(default_factory=lambda: ["zh", "en"])
 
@@ -152,9 +150,9 @@ class DocumentProcessingConfig:
             self.output_format = "markdown"
 
         # 验证分区策略
-        valid_strategies = ["hi_res", "fast", "ocr_only"]
+        valid_strategies = ["hi_res", "fast"]
         if self.partition_strategy not in valid_strategies:
-            self.partition_strategy = "hi_res"
+            self.partition_strategy = "fast"
 
         # 验证多模态配置
         if self.enable_multimodal and not self.multimodal_config:
@@ -650,20 +648,20 @@ class UnifiedDocumentProcessor:
             self.logger.error(f"模型预下载过程出错: {e}")
 
     def _build_partition_options(self) -> Dict[str, Any]:
-        """构建Unstructured分区选项"""
+        """构建Unstructured分区选项，使用最小参数避免OCR触发"""
         options = {
             "strategy": self.config.partition_strategy,
-            "languages": self.config.languages,
         }
 
-        if self.config.model_name:
-            options["model_name"] = self.config.model_name
+        # 只在必要时添加languages参数
+        if self.config.languages and self.config.languages != ["auto"]:
+            options["languages"] = self.config.languages
 
         return options
 
     def process_document(self, file_path: str) -> DocumentContent:
         """
-        统一的文档处理接口，支持LLM多模态增强
+        统一的文档处理接口，支持LLM多模态增强，完全避免OCR
 
         Args:
             file_path: 文档文件路径
@@ -676,16 +674,36 @@ class UnifiedDocumentProcessor:
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"文档文件不存在: {file_path}")
 
-            # 2. 检查unstructured是否可用
-            if not UNSTRUCTURED_AVAILABLE:
-                self.logger.warning("unstructured库未安装，使用回退处理方案")
-                doc_content = self._fallback_process_document(file_path)
-            else:
-                # 使用Unstructured处理基础内容
-                elements = partition(filename=file_path, **self.partition_options)
-                doc_content = self._extract_structured_content(elements, file_path)
+            # 2. 文件类型检测，决定处理策略
+            file_extension = os.path.splitext(file_path)[1].lower()
+            processing_strategy = self._determine_processing_strategy(file_extension)
 
-            # 3. 如果启用多模态，额外处理图片内容
+            self.logger.info(
+                f"文件类型: {file_extension}, 处理策略: {processing_strategy}"
+            )
+
+            # 3. 根据文件类型采用不同的处理方式
+            if processing_strategy == "pure_text":
+                # 纯文本文件：使用回退处理，完全避免unstructured的OCR
+                doc_content = self._process_pure_text_file(file_path)
+            elif processing_strategy == "structured_text":
+                # 结构化文本：使用unstructured，但避免OCR相关参数
+                if not UNSTRUCTURED_AVAILABLE:
+                    self.logger.warning("unstructured库未安装，使用回退处理方案")
+                    doc_content = self._fallback_process_document(file_path)
+                else:
+                    # 使用最简化的unstructured参数，避免触发OCR
+                    doc_content = self._process_with_minimal_unstructured(file_path)
+            else:
+                # Office文档和PDF：使用unstructured，依赖fast策略减少OCR
+                if not UNSTRUCTURED_AVAILABLE:
+                    self.logger.warning("unstructured库未安装，使用回退处理方案")
+                    doc_content = self._fallback_process_document(file_path)
+                else:
+                    elements = partition(filename=file_path, **self.partition_options)
+                    doc_content = self._extract_structured_content(elements, file_path)
+
+            # 4. 如果启用多模态，额外处理图片内容
             if self.config.enable_multimodal and self.multimodal_processor:
                 try:
                     self.logger.info(f"开始LLM多模态处理: {file_path}")
@@ -712,6 +730,108 @@ class UnifiedDocumentProcessor:
         except Exception as e:
             self.logger.error(f"文档处理失败 {file_path}: {e}")
             return self._handle_processing_error(file_path, e)
+
+    def _determine_processing_strategy(self, file_extension: str) -> str:
+        """根据文件扩展名确定处理策略，避免OCR"""
+        # 纯文本文件：完全避免unstructured，使用简单文本读取
+        pure_text_extensions = [
+            ".txt",
+            ".md",
+            ".csv",
+            ".json",
+            ".log",
+            ".xml",
+            ".html",
+            ".htm",
+        ]
+
+        # 结构化文本：可以使用unstructured但不触发OCR
+        structured_text_extensions = [".rtf", ".msg"]
+
+        if file_extension in pure_text_extensions:
+            return "pure_text"
+        elif file_extension in structured_text_extensions:
+            return "structured_text"
+        else:
+            # Office文档、PDF、图片等：使用unstructured但控制OCR使用
+            return "complex_document"
+
+    def _process_pure_text_file(self, file_path: str) -> DocumentContent:
+        """处理纯文本文件，完全避免OCR和unstructured"""
+        self.logger.info(f"使用纯文本处理模式: {file_path}")
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            return DocumentContent(
+                sections=[
+                    {
+                        "type": "text",
+                        "content": content,
+                        "metadata": {"processing_mode": "pure_text", "no_ocr": True},
+                    }
+                ],
+                metadata={
+                    "file_path": file_path,
+                    "file_type": self._detect_file_type(file_path),
+                    "processing_timestamp": datetime.now().isoformat(),
+                    "processing_mode": "pure_text",
+                    "no_unstructured_ocr": True,
+                    "element_count": 1,
+                },
+                full_text=content,
+            )
+        except UnicodeDecodeError:
+            # 尝试其他编码
+            try:
+                with open(file_path, "r", encoding="gbk") as f:
+                    content = f.read()
+
+                return DocumentContent(
+                    sections=[
+                        {
+                            "type": "text",
+                            "content": content,
+                            "metadata": {
+                                "processing_mode": "pure_text_gbk",
+                                "no_ocr": True,
+                            },
+                        }
+                    ],
+                    metadata={
+                        "file_path": file_path,
+                        "file_type": self._detect_file_type(file_path),
+                        "processing_timestamp": datetime.now().isoformat(),
+                        "processing_mode": "pure_text_gbk",
+                        "no_unstructured_ocr": True,
+                        "element_count": 1,
+                        "encoding": "gbk",
+                    },
+                    full_text=content,
+                )
+            except Exception as e:
+                return self._handle_processing_error(file_path, e)
+
+    def _process_with_minimal_unstructured(self, file_path: str) -> DocumentContent:
+        """使用最小化参数的unstructured处理，避免OCR触发"""
+        self.logger.info(f"使用最小化unstructured处理: {file_path}")
+
+        try:
+            # 只传递最基本的参数，避免触发OCR
+            elements = partition(
+                filename=file_path,
+                strategy="fast",  # 使用fast策略，减少OCR使用
+                # 注意：故意不传递languages、model_name等可能触发OCR的参数
+            )
+
+            return self._extract_structured_content(elements, file_path)
+
+        except Exception as e:
+            self.logger.warning(f"最小化unstructured处理失败，回退到完整处理: {e}")
+            # 回退到完整的unstructured处理
+            elements = partition(filename=file_path, **self.partition_options)
+            return self._extract_structured_content(elements, file_path)
 
     def _extract_structured_content(self, elements, file_path: str) -> DocumentContent:
         """提取结构化内容"""
@@ -853,7 +973,7 @@ class UnifiedDocumentProcessor:
     def _merge_image_content(
         self, doc_content: DocumentContent, image_contents: List[ImageContentInfo]
     ) -> DocumentContent:
-        """合并图片内容到文档内容中，替换低质量的OCR结果"""
+        """合并图片内容到文档内容中，通过LLM增强识别结果"""
         try:
             # 检查是否需要替换现有的图片内容
             image_sections_to_replace = []
@@ -915,27 +1035,7 @@ class UnifiedDocumentProcessor:
                     is_image_section = True
                     self.logger.debug(f"Section {i}: metadata匹配")
 
-                # 4. 检查是否是可能的OCR错误识别内容
-                elif (
-                    len(section_content) < 50  # 内容较短，可能是OCR结果
-                    and any(
-                        ocr_indicator in section_content.lower()
-                        for ocr_indicator in [
-                            "unstructured",
-                            "image",
-                            "图",
-                            "页",
-                            "page",
-                            "element",
-                        ]
-                    )
-                ):
-                    is_image_section = True
-                    self.logger.debug(
-                        f"Section {i}: OCR内容特征匹配 - {section_content}"
-                    )
-
-                # 5. 特别检查：如果是第一个非文本section，也认为是图片内容
+                # 4. 特别检查：如果是第一个非文本section，也认为是图片内容
                 elif (
                     i > 0
                     and section_type == "text"
@@ -1407,7 +1507,7 @@ class EnhancedExcelProcessorLLM:
         try:
             # 1. 加载Excel文件
             self.logger.info(f"加载Excel文件: {excel_path}")
-            workbook = openpyxl.load_workbook(excel_path)
+            workbook = openpyxl.load_workbook(excel_path, data_only=True)
             sheet = workbook.active
 
             # 2. 查找超链接
@@ -1568,7 +1668,7 @@ def process_excel_links_llm(
 
 if __name__ == "__main__":
     print("Excel链接内容提取器 v2.0.0 - LLM多模态增强版")
-    print("替代传统OCR，采用多模态大模型进行高精度图片内容识别")
+    print("采用多模态大模型进行高精度图片内容识别和解析")
     print()
 
     # 1. 创建多模态配置
@@ -1577,7 +1677,6 @@ if __name__ == "__main__":
         vision_model_name="qwen-vl-plus",  # 通义千问视觉模型
         api_key=os.environ.get("QWEN_V"),  # 需要设置DashScope API密钥
         api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",  # OpenAI兼容端点
-        enable_vision_ocr=True,
         extract_embedded_images=True,
         vision_prompt="请详细识别和描述这张图片中的所有文本内容，包括标题、正文、表格、图表等，保持原有的格式和结构。如果是表格，请用markdown表格格式输出。",
         max_tokens_per_image=2000,
