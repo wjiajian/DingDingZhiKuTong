@@ -24,13 +24,19 @@ import openpyxl
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font
 
+# 导入并处理partition函数
+from typing import Any, Callable, Optional
+
+partition: Optional[Callable[..., Any]] = None
+UNSTRUCTURED_AVAILABLE = False
+
 try:
-    from unstructured.partition.auto import partition
+    from unstructured.partition.auto import partition as _partition
 
     UNSTRUCTURED_AVAILABLE = True
+    partition = _partition
 except ImportError:
-    UNSTRUCTURED_AVAILABLE = False
-    partition = None
+    pass  # 保持默认值
 
 # 1. 屏蔽 pdfminer 的字体警告
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
@@ -163,7 +169,7 @@ class DocumentProcessingConfig:
 class HyperlinkInfo:
     """超链接信息"""
 
-    cell: openpyxl.cell.Cell
+    cell: Any  # openpyxl Cell对象，类型较为复杂
     target: str
     display_text: Union[str, int, float]
 
@@ -182,7 +188,7 @@ class MultimodalProcessor:
     def __init__(self, config: MultimodalConfig):
         self.config = config
         self.logger = logging.getLogger(__name__)
-        self._cache = {} if config.enable_caching else None
+        self._cache: Optional[Dict[str, str]] = {} if config.enable_caching else None
 
     def extract_and_process_images(self, file_path: str) -> List[ImageContentInfo]:
         """
@@ -205,7 +211,7 @@ class MultimodalProcessor:
             all_images = extracted_images + external_images
 
             # 4. 批量处理图片
-            processed_images = []
+            processed_images: List[ImageContentInfo] = []
             for img_info in all_images:
                 try:
                     processed_content = self._process_single_image(
@@ -480,9 +486,19 @@ class MultimodalProcessor:
             from openai import OpenAI
 
             # 创建客户端
-            client_params = {"api_key": self.config.api_key}
-            if self.config.api_base:
-                client_params["base_url"] = self.config.api_base
+            client_params = {}
+
+            # 安全获取api_key
+            api_key = getattr(self.config, "api_key", None)
+            if api_key and isinstance(api_key, str):
+                client_params["api_key"] = api_key
+            else:
+                raise ValueError("API key is required and must be a string")
+
+            # 安全获取api_base
+            api_base = getattr(self.config, "api_base", None)
+            if api_base and isinstance(api_base, str):
+                client_params["base_url"] = api_base
 
             client = OpenAI(**client_params)
 
@@ -511,7 +527,8 @@ class MultimodalProcessor:
                 max_tokens=self.config.max_tokens_per_image,
             )
 
-            return response.choices[0].message.content
+            content = response.choices[0].message.content
+            return content if content is not None else "[无法获取内容]"
 
         except ImportError:
             return "[错误: 请安装openai库: pip install openai]"
@@ -524,15 +541,25 @@ class MultimodalProcessor:
             from openai import OpenAI
 
             # 配置OpenAI兼容的客户端
-            client_params = {"api_key": self.config.api_key}
+            client_params = {}
+
+            # 安全获取api_key
+            api_key = getattr(self.config, "api_key", None)
+            if api_key and isinstance(api_key, str):
+                client_params["api_key"] = api_key
+            else:
+                raise ValueError("API key is required and must be a string")
 
             # 设置DashScope的OpenAI兼容API端点
-            if not self.config.api_base:
+            if not getattr(self.config, "api_base", None):
                 self.config.api_base = (
                     "https://dashscope.aliyuncs.com/compatible-mode/v1"
                 )
 
-            client_params["base_url"] = self.config.api_base
+            # 安全获取api_base
+            api_base = getattr(self.config, "api_base", None)
+            if api_base and isinstance(api_base, str):
+                client_params["base_url"] = api_base
 
             client = OpenAI(**client_params)
 
@@ -561,7 +588,8 @@ class MultimodalProcessor:
                 temperature=0.1,
             )
 
-            return response.choices[0].message.content
+            content = response.choices[0].message.content
+            return content if content is not None else "[无法获取内容]"
 
         except ImportError:
             return "[错误: 请安装openai库: pip install openai]"
@@ -591,12 +619,11 @@ class UnifiedDocumentProcessor:
         self.partition_options = self._build_partition_options()
 
         # 初始化多模态处理器
+        self.multimodal_processor: Optional[MultimodalProcessor] = None
         if self.config.enable_multimodal and self.config.multimodal_config:
             self.multimodal_processor = MultimodalProcessor(
                 self.config.multimodal_config
             )
-        else:
-            self.multimodal_processor = None
 
         # 预下载模型（如果需要）
         if not self.config.offline_mode:
@@ -636,7 +663,7 @@ class UnifiedDocumentProcessor:
                         filename=model["filename"],
                         cache_dir=model["local_dir"],
                         resume_download=True,
-                        timeout=self.config.download_timeout,
+                        # 移除不存在的timeout参数
                     )
                     self.logger.info(f"模型下载完成: {model['filename']}")
                 except Exception as e:
@@ -649,7 +676,7 @@ class UnifiedDocumentProcessor:
 
     def _build_partition_options(self) -> Dict[str, Any]:
         """构建Unstructured分区选项，使用最小参数避免OCR触发"""
-        options = {
+        options: Dict[str, Any] = {
             "strategy": self.config.partition_strategy,
         }
 
@@ -700,8 +727,22 @@ class UnifiedDocumentProcessor:
                     self.logger.warning("unstructured库未安装，使用回退处理方案")
                     doc_content = self._fallback_process_document(file_path)
                 else:
-                    elements = partition(filename=file_path, **self.partition_options)
-                    doc_content = self._extract_structured_content(elements, file_path)
+                    if partition is None:
+                        self.logger.warning("unstructured库不可用，使用回退处理方案")
+                        doc_content = self._fallback_process_document(file_path)
+                    else:
+                        elements = partition(
+                            filename=file_path, **self.partition_options
+                        )
+                        if elements is None:
+                            self.logger.warning(
+                                f"无法解析文档，使用回退处理方案: {file_path}"
+                            )
+                            doc_content = self._fallback_process_document(file_path)
+                        else:
+                            doc_content = self._extract_structured_content(
+                                elements, file_path
+                            )
 
             # 4. 如果启用多模态，额外处理图片内容
             if self.config.enable_multimodal and self.multimodal_processor:
@@ -819,18 +860,42 @@ class UnifiedDocumentProcessor:
 
         try:
             # 只传递最基本的参数，避免触发OCR
+            if partition is None:
+                raise Exception("unstructured库不可用")
+
             elements = partition(
                 filename=file_path,
                 strategy="fast",  # 使用fast策略，减少OCR使用
                 # 注意：故意不传递languages、model_name等可能触发OCR的参数
             )
 
+            if elements is None:
+                self.logger.warning(
+                    f"最小化unstructured处理失败，回退到完整处理: 文档解析失败"
+                )
+                # 回退到完整的unstructured处理
+                if partition is None:
+                    raise Exception("unstructured库不可用")
+                elements = partition(filename=file_path, **self.partition_options)
+                if elements is None:
+                    self.logger.error(f"完整处理也失败: {file_path}")
+                    return self._handle_processing_error(
+                        file_path, Exception("文档解析失败")
+                    )
+
             return self._extract_structured_content(elements, file_path)
 
         except Exception as e:
             self.logger.warning(f"最小化unstructured处理失败，回退到完整处理: {e}")
             # 回退到完整的unstructured处理
+            if partition is None:
+                self.logger.error(f"unstructured库不可用: {file_path}")
+                return self._handle_processing_error(file_path, e)
+
             elements = partition(filename=file_path, **self.partition_options)
+            if elements is None:
+                self.logger.error(f"完整处理也失败: {file_path}")
+                return self._handle_processing_error(file_path, e)
             return self._extract_structured_content(elements, file_path)
 
     def _extract_structured_content(self, elements, file_path: str) -> DocumentContent:
@@ -1200,8 +1265,11 @@ class UnifiedDocumentProcessor:
                 doc_content.metadata["processing_mode"] = "insert"
 
             # 清理临时文件
-            if hasattr(self, "multimodal_processor"):
-                self.multimodal_processor.cleanup_temporary_files(image_contents)
+            if hasattr(self, "multimodal_processor") and self.multimodal_processor:
+                try:
+                    self.multimodal_processor.cleanup_temporary_files(image_contents)
+                except Exception as e:
+                    self.logger.warning(f"清理临时文件失败: {e}")
 
             return doc_content
 
@@ -1314,6 +1382,47 @@ class ExcelLinkProcessor:
         self.document_processor = document_processor
         self.logger = logging.getLogger(__name__)
 
+    def _safe_set_cell_value(self, sheet, row: int, col: int, value: str) -> bool:
+        """
+        安全设置单元格值，处理合并单元格的情况
+
+        Args:
+            sheet: Excel工作表
+            row: 行号
+            col: 列号
+            value: 要设置的值
+
+        Returns:
+            bool: 设置是否成功
+        """
+        try:
+            cell = sheet.cell(row=row, column=col)
+
+            # 检查是否为合并单元格
+            if hasattr(cell, "coordinate") and cell.coordinate in sheet.merged_cells:
+                # 找到合并区域
+                for merged_range in sheet.merged_cells.ranges:
+                    if cell.coordinate in merged_range:
+                        # 使用合并区域的左上角单元格
+                        top_left_cell = sheet[merged_range.coord.split(":")[0]]
+                        top_left_cell.value = value
+                        self.logger.debug(f"设置合并单元格值成功: {merged_range.coord}")
+                        return True
+
+                # 如果在合并区域内但找不到范围，尝试在区域外设置
+                self.logger.warning(
+                    f"单元格 {cell.coordinate} 在合并区域内但找不到对应范围"
+                )
+                return False
+            else:
+                # 普通单元格
+                cell.value = value
+                return True
+
+        except Exception as e:
+            self.logger.error(f"设置单元格值失败 (row={row}, col={col}): {e}")
+            return False
+
     def find_hyperlinks(self, sheet) -> List[HyperlinkInfo]:
         """查找Excel中的超链接"""
         links = []
@@ -1414,7 +1523,9 @@ class ContentFormatter:
 
         # 添加内容段落
         for section in doc_content.sections:
-            content = section["content"]
+            content = section.get("content", "")
+            if not isinstance(content, str):
+                content = str(content) if content is not None else ""
 
             # 内容长度限制
             if len(content) > self.config.max_content_length:
@@ -1493,7 +1604,7 @@ class EnhancedExcelProcessorLLM:
         Returns:
             Dict: 处理结果
         """
-        results = {
+        results: Dict[str, Any] = {
             "file_path": excel_path,
             "processed_at": datetime.now().isoformat(),
             "total_links": 0,
@@ -1509,6 +1620,9 @@ class EnhancedExcelProcessorLLM:
             self.logger.info(f"加载Excel文件: {excel_path}")
             workbook = openpyxl.load_workbook(excel_path, data_only=True)
             sheet = workbook.active
+
+            if sheet is None:
+                raise ValueError(f"无法获取Excel工作表: {excel_path}")
 
             # 2. 查找超链接
             links = self.excel_processor.find_hyperlinks(sheet)
@@ -1526,8 +1640,24 @@ class EnhancedExcelProcessorLLM:
 
             # 设置标题
             header_cell = sheet.cell(row=1, column=content_col)
-            header_cell.value = "链接文档内容 (LLM增强)"
-            header_cell.font = Font(bold=True)
+            if not self.excel_processor._safe_set_cell_value(
+                sheet, 1, content_col, "链接文档内容 (LLM增强)"
+            ):
+                # 如果设置失败，尝试直接设置字体
+                try:
+                    header_cell.font = Font(bold=True)
+                except:
+                    pass
+            else:
+                # 成功设置值后设置字体
+                try:
+                    # 找到实际设置值的单元格并设置字体
+                    actual_cell = sheet.cell(row=1, column=content_col)
+                    if actual_cell.value == "链接文档内容 (LLM增强)":
+                        actual_cell.font = Font(bold=True)
+                except:
+                    pass
+
             self.logger.info(f"在第 {get_column_letter(content_col)} 列插入内容列")
 
             # 5. 处理每个链接
@@ -1557,7 +1687,34 @@ class EnhancedExcelProcessorLLM:
                     content_cell = sheet.cell(
                         row=link_info.cell.row, column=content_col
                     )
-                    content_cell.value = formatted_content
+
+                    # 安全设置内容，处理合并单元格
+                    if not self.excel_processor._safe_set_cell_value(
+                        sheet, link_info.cell.row, content_col, formatted_content
+                    ):
+                        # 如果设置失败，尝试直接赋值（适用于非合并单元格）
+                        try:
+                            content_cell.value = formatted_content
+                        except Exception as e:
+                            self.logger.warning(f"设置Excel单元格内容失败: {e}")
+                            # 备选方案：使用单元格的用户属性
+                            try:
+                                if hasattr(content_cell, "_value"):
+                                    content_cell._value = formatted_content
+                                elif hasattr(content_cell, "coordinate"):
+                                    # 设置注释作为备选方案
+                                    comment = openpyxl.comments.Comment(
+                                        formatted_content, "Excel Processor"
+                                    )
+                                    content_cell.comment = comment
+                            except:
+                                # 最后备选：记录到日志
+                                self.logger.info(
+                                    f"无法设置单元格内容，将记录到错误列表"
+                                )
+                                results["errors"].append(
+                                    f"无法设置单元格内容: {str(e)}"
+                                )
 
                     results["successful"] += 1
                     self.logger.info(f"处理完成: {link_info.target}")
@@ -1588,13 +1745,13 @@ class EnhancedExcelProcessorLLM:
         return results
 
     def process_multiple_files(
-        self, file_paths: List[str], max_workers: int = None
+        self, file_paths: List[str], max_workers: Optional[int] = None
     ) -> Dict[str, Dict[str, Any]]:
         """批量处理多个Excel文件"""
         if not max_workers:
-            max_workers = (
-                self.config.max_workers if hasattr(self.config, "max_workers") else 4
-            )
+            max_workers = getattr(self.config, "max_workers", 4)
+            if not isinstance(max_workers, int):
+                max_workers = int(max_workers) if max_workers else 4
 
         if not self.config.enable_parallel_processing:
             max_workers = 1
