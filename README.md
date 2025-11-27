@@ -1,6 +1,8 @@
-# DingDingZhiKuTong - 钉钉知识库同步与内容提取工具集
+# DingDingZhiKuTong - 钉钉知识库同步工具集
 
-本工具套件提供了两大核心功能：一是将钉钉知识库与本地文件夹进行精确、增量的单向同步；二是从Excel文件中提取其链接的各类文档的详细内容。
+> 由于在搭建企业 AI 助手期间需要同步各部门的知识库文件，故开发了此项目，此项目主要为 RPA 流程做相关基础工作，文件的下载部分通过 RPA 部分实现，故未在此项目提及。
+
+本工具专注于钉钉知识库与本地文件夹 (NAS) 的精确、增量单向同步，提供完整的知识库备份和同步解决方案。
 
 ## 🚀 核心功能
 
@@ -10,70 +12,26 @@
     *   **精确同步**：确保最终的本地文件夹内容与钉钉知识库的线上状态完全一致，可自动删除本地多余的文件和目录。
     *   **格式自动转换**：自动将钉钉的专有后缀（如 `.adoc`, `.axls`）映射为标准的Office后缀（`.docx`, `.xlsx`），确保本地文件兼容性。
 
-*   **Excel链接内容提取 (Excel Content Extraction)**
-    *   **多层次工具选择**：提供从基础到专家级的三个不同工具，满足不同需求。
-    *   **广泛的格式支持**：高级版工具可支持超过30种文档格式，包括 `PDF`, `DOCX`, `PPTX`, `HTML`, `Markdown` 等。
-    *   **LLM多模态识别 (专家版)**：利用多模态大模型（如 `GPT-4V`, `通义千问-VL`）高精度识别文档中的图片、图表和表格内容，远超传统OCR。
-    *   **高度可配置**：提供灵活的配置选项，可以控制输出格式、并发处理、内容长度等。
-    *   **路径自动解析**：智能处理Excel中链接的相对和绝对路径。
-
 ## 📋 目录结构
 
 ```
 DingDingZhiKuTong/
 ├── getToken.py                           # 钉钉API认证模块
-├── get_KB_FILE_URL.py                    # 【同步】知识库文件管理和比较核心模块
-├── compare_move_file.py                  # 【同步】文件精确同步执行模块
-|
-├── write_file_excel.py                   # 【提取】基础版-Excel链接内容提取工具
-├── excel_link_content_fetcher.py         # 【提取】高级版-支持30+种格式
-├── excel_link_content_fetcher_LLM.py     # 【提取】专家版-LLM多模态增强
-|
-├── excel_link_content_fetcher_README.md     # (将被废弃)
-├── excel_link_content_fetcher_LLM_README.md # (将被废弃)
+├── get_KB_FILE_URL.py                    # 知识库文件管理和比较核心模块
+├── compare_move_file.py                  # 文件精确同步执行模块
 └── README.md                              # (本文档)
 ```
 
 ## 🛠️ 环境准备
 
-确保您的环境中已经安装了 Python 3.7+。然后，根据您需要使用的功能安装依赖。
+确保您的环境中已经安装了 Python 3.7+。
 
-### 1. 基础依赖 (所有功能都需要)
-```bash
-pip install openpyxl
-```
-
-### 2. 知识库同步功能依赖
+### 钉钉知识库同步功能依赖
 ```bash
 pip install alibabacloud_dingtalk alibabacloud_tea_openapi alibabacloud_tea_util
 ```
 
-### 3. Excel内容提取功能依赖
-
-*   **基础版 (`write_file_excel.py`)**
-    ```bash
-    pip install python-docx
-    ```
-
-*   **高级版 (`excel_link_content_fetcher.py`)**
-    ```bash
-    # 安装unstructured核心及所有文档格式支持
-    pip install "unstructured[all-docs]"
-    
-    # 在Linux (Ubuntu/Debian)上，可能还需要系统依赖
-    # sudo apt-get install libmagic-dev poppler-utils tesseract-ocr libreoffice
-    ```
-
-*   **专家版 (`excel_link_content_fetcher_LLM.py`)**
-    ```bash
-    # 首先安装高级版的所有依赖
-    pip install "unstructured[all-docs]"
-    
-    # 然后安装LLM和图片提取相关依赖
-    pip install openai PyMuPDF beautifulsoup4
-    ```
-
-## 📚 工作流程一：知识库与NAS同步
+## 📚 工作流程：知识库与NAS同步
 
 这是一个三步走的工作流，用于将钉钉知识库完整地同步到本地。
 
@@ -159,70 +117,32 @@ sync_nas_with_kb_tree(..., dry_run=False)
 
 ---
 
-## 📖 工作流程二：Excel链接内容提取
+## 🔗 相关项目：Excel链接内容提取
+> 由于钉钉 AI 文档存在文件嵌套文件的问题，故开发了此项目用于提取解析文档附件
 
-此功能用于读取Excel文件中指向本地文件的超链接，提取这些文档的内容，并写回Excel的新列中。提供了三个级别的工具供选择。
+如果您需要处理Excel文件中链接的文档内容提取，我们推荐使用 **[LinkContentAI](https://github.com/wjiajian/LinkContentAI)** 项目。
 
-### ⚠️ 重要提醒
-所有这些脚本都会**直接修改**您传入的Excel文件。**操作前请务必备份原始文件！**
+### LinkContentAI 简介
 
-### 1. 基础版: `write_file_excel.py`
-- **特点**: 轻量，依赖少，代码简单。
-- **支持格式**: `.txt`, `.docx`, `.xlsx`。
-- **使用方法**: 直接修改脚本底部的 `excel_file_path` 变量，然后运行。
-```python
-# 在 write_file_excel.py 中
-excel_file_path = "C:\\path\\to\\your\\file.xlsx"
-process_excel_in_place(excel_file_path)
-```
-```bash
-python write_file_excel.py
-```
+**LinkContentAI** 是一个智能的Excel链接附件文档提取解析工具，专门设计用于自动化处理Excel中的链接文档。
 
-### 2. 高级版: `excel_link_content_fetcher.py`
-- **特点**: 功能强大，基于 `unstructured` 库，支持30多种文档格式，支持并发处理。
-- **使用方法**: 建议通过代码调用。
-```python
-# 示例代码
-from excel_link_content_fetcher import process_excel_links, DocumentProcessingConfig
+### 核心特性
 
-config = DocumentProcessingConfig(
-    output_format="markdown",
-    partition_strategy="hi_res",  # "hi_res"策略会执行OCR
-    enable_parallel_processing=True,
-    max_workers=4
-)
-result = process_excel_links("C:\\path\\to\\your\\file.xlsx", config=config)
-print(result)
-```
+*   **多格式支持**：支持PDF、DOCX、TXT、XLSX等多种文档格式
+*   **智能图片分析**：集成qwen-vl多模态大模型，自动解析文档中的图片内容
+*   **优雅输出**：将提取的内容转换为Markdown格式，便于阅读和使用
+*   **智能定位**：精确的图片位置检测和占位符替换
+*   **实时反馈**：提供处理进度显示和临时文件自动管理
+*   **灵活使用**：支持本地和API调用两种使用方式
 
-### 3. 专家版: `excel_link_content_fetcher_LLM.py`
-- **特点**: 具备高级版所有功能，并增加了LLM多模态能力，可高精度识别图片内容。
-- **凭证准备**: 需要配置LLM的API Key (如OpenAI, 或通义千问)。
-- **使用方法**：
-```python
-# 示例代码 (使用通义千问)
-from excel_link_content_fetcher_LLM import *
+### 适用场景
 
-# 1. 配置多模态模型
-multimodal_config = MultimodalConfig(
-    vision_model_provider="qwen",
-    vision_model_name="qwen-vl-plus",
-    api_key=os.environ.get("QWEN_V"), # 推荐使用环境变量
-    api_base="https://dashscope.aliyuncs.com/compatible-mode/v1"
-)
+*   自动化处理包含链接附件的Excel文件
+*   为AI助手构建知识库
+*   批量文档内容提取和整理
+*   智能文档内容分析与归档
 
-# 2. 创建总配置并启用多模态
-config = DocumentProcessingConfig(
-    enable_multimodal=True,
-    multimodal_config=multimodal_config
-)
-
-# 3. 执行处理
-processor = EnhancedExcelProcessorLLM(config)
-result = processor.process_excel_file("C:\\path\\to\\your\\file.xlsx")
-print(result)
-```
+LinkContentAI完美补充了本项目在文档处理方面的能力，特别适合需要处理大量包含图片的文档附件，并需要智能理解图片内容的应用场景。
 
 ## 🐛 常见问题
 
@@ -230,14 +150,3 @@ print(result)
 1.  **API调用失败**: 检查 `ACCESS_TOKEN` 是否过期或 `AppKey` 等凭证是否正确。
 2.  **知识库找不到**: 检查 `WORKSPACE_NAME` 是否与钉钉后台显示的名称完全一致。
 3.  **文件同步不符合预期**: 务必先运行 `compare_move_file.py` 的演练模式 (`dry_run=True`)，检查其输出的计划操作是否正确。
-
-### 提取相关
-1.  **Excel处理失败/无法保存**: 确保Excel文件未被其他程序打开，并检查文件写入权限。
-2.  **内容提取不准确/格式混乱**：
-    - 对于`高级版`和`专家版`，尝试切换 `partition_strategy` (`"hi_res"` 或 `"fast"`)。
-    - 对于`专家版`的图片识别，调整 `vision_prompt` 以获得更精确的结果。
-3.  **依赖安装问题**: `unstructured` 库可能需要特定的系统依赖，请参考其官方文档进行安装。
-
----
-*最后更新: 2025-11-21*
-*文档版本: 2.0*
