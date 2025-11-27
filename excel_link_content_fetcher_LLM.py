@@ -927,8 +927,7 @@ class UnifiedDocumentProcessor:
 
     @staticmethod
     def _safe_get_metadata_value(metadata, key, default=None):
-        """安全获取metadata值，支持字典和ElementMetadata对象"""
-        if hasattr(metadata, "get"):
+        if isinstance(metadata, dict):
             # 如果是字典类型
             return metadata.get(key, default)
         elif hasattr(metadata, key):
@@ -1540,7 +1539,7 @@ class ContentFormatter:
 
                 def _safe_check(metadata, key):
                     """安全检查metadata中的布尔值"""
-                    if hasattr(metadata, "get"):
+                    if isinstance(metadata, dict):
                         return metadata.get(key, False)
                     elif hasattr(metadata, key):
                         return getattr(metadata, key, False)
