@@ -28,13 +28,27 @@ from alibabacloud_tea_util.client import Client as UtilClient
 
 # --- 配置区 ---
 # 请根据您的实际情况修改以下配置
-ACCESS_TOKEN = ""                                         # 访问钉钉API的access_token
-OPERATOR_ID = ""                                          # 钉钉用户的unionId，需要通过钉钉开发者后台获取
-WORKSPACE_NAME = ""                                       # 需要遍历的目标知识库的完整名称
-OUTPUT_FILE = ""                                          # 定义输出文件的名称，用于存储所有文档的URL
-WORKSPACE_LIST_OUTPUT_FILE = ""                           # 存储获取的知识库列表的文件
-KB_TREE_OUTPUT_FILE = ""                                  # 存储知识库完整文件树的JSON文件
-NAS_ROOT_PATH = ""                                        # 要对比的本地NAS文件夹根路径
+ACCESS_TOKEN = ""  # 访问钉钉API的access_token
+OPERATOR_ID = ""  # 钉钉用户的unionId，需要通过钉钉开发者后台获取
+WORKSPACE_NAME = ""  # 需要遍历的目标知识库的完整名称
+OUTPUT_FILE = ""  # 定义输出文件的名称，用于存储所有文档的URL
+WORKSPACE_LIST_OUTPUT_FILE = ""  # 存储获取的知识库列表的文件
+KB_TREE_OUTPUT_FILE = ""  # 存储知识库完整文件树的JSON文件
+NAS_ROOT_PATH = ""  # 要对比的本地NAS文件夹根路径
+
+# 指定需要同步的子文件夹路径（相对于知识库根目录）
+# 例如：只同步"天猫部知识库"下的"天猫部SOP"文件夹
+# 格式："知识库名称":["需要同步的路径列表"]
+SYNC_FILTERS = {
+    "天猫部知识库": ["天猫部SOP"],
+    # 可以添加更多知识库和对应的同步路径
+    # "其他知识库": ["文件夹1", "文件夹2/子文件夹"],
+}
+
+# 如果设置为True，则只同步SYNC_FILTERS中指定的路径
+# 如果设置为False或知识库不在SYNC_FILTERS中，则同步整个知识库
+USE_SYNC_FILTER = True
+
 # WORKSPACE_NAME = "知识库导入NAS测试库"                    # 需要遍历的目标知识库的完整名称
 # OUTPUT_FILE = ".\url.json"                              # 定义输出文件的名称，用于存储所有文档的URL
 # WORKSPACE_LIST_OUTPUT_FILE = ".\workspaces_list.json"   # 存储获取的知识库列表的文件
@@ -43,10 +57,11 @@ NAS_ROOT_PATH = ""                                        # 要对比的本地NA
 
 # 钉钉文件后缀到标准Office后缀的映射
 EXTENSION_MAPPING = {
-    '.adoc': '.docx',
-    '.axls': '.xlsx',
-    '.aslide': '.pptx',
+    ".adoc": ".docx",
+    ".axls": ".xlsx",
+    ".aslide": ".pptx",
 }
+
 
 def get_workspaces(access_token: str, operator_id: str):
     """
@@ -57,19 +72,26 @@ def get_workspaces(access_token: str, operator_id: str):
     list_workspaces_headers.x_acs_dingtalk_access_token = access_token
     list_workspaces_request = dingtalkwiki__2__0_models.ListWorkspacesRequest(
         max_results=30,
-        order_by='VIEW_TIME_DESC',
+        order_by="VIEW_TIME_DESC",
         with_permission_role=False,
-        operator_id=operator_id
+        operator_id=operator_id,
     )
     try:
-        response = client.list_workspaces_with_options(list_workspaces_request, list_workspaces_headers, util_models.RuntimeOptions())
+        response = client.list_workspaces_with_options(
+            list_workspaces_request,
+            list_workspaces_headers,
+            util_models.RuntimeOptions(),
+        )
         return response
     except Exception as err:
         if not UtilClient.empty(err.code) and not UtilClient.empty(err.message):
             print(f"API请求失败: {err.message}")
             return None
 
-def get_workspace_data(workspace_name: str, access_token: str, operator_id: str) -> (str, List[Dict[str, Any]]):
+
+def get_workspace_data(
+    workspace_name: str, access_token: str, operator_id: str
+) -> (str, List[Dict[str, Any]]):
     """
     调用API获取知识库列表，写入文件，并返回指定知识库的根节点ID和知识库列表。
 
@@ -85,7 +107,7 @@ def get_workspace_data(workspace_name: str, access_token: str, operator_id: str)
     response = get_workspaces(access_token, operator_id)
     if response and response.body and response.body.workspaces:
         workspaces = response.body.to_map().get("workspaces", [])
-        
+
         # 将获取的知识库列表写入新文件
         try:
             with open(WORKSPACE_LIST_OUTPUT_FILE, "w", encoding="utf-8") as f:
@@ -99,8 +121,8 @@ def get_workspace_data(workspace_name: str, access_token: str, operator_id: str)
                 print(f"成功找到知识库 '{workspace_name}'")
                 return workspace.get("rootNodeId"), workspaces
     else:
-        print("错误: 未能从API获取到有效的知识库列表。" )
-    
+        print("错误: 未能从API获取到有效的知识库列表。")
+
     return None, None
 
 
@@ -112,9 +134,10 @@ def create_client() -> dingtalkwiki_2_0Client:
         dingtalkwiki_2_0Client: 配置好的API客户端实例。
     """
     config = open_api_models.Config()
-    config.protocol = 'https'
-    config.region_id = 'central'
+    config.protocol = "https"
+    config.region_id = "central"
     return dingtalkwiki_2_0Client(config)
+
 
 def get_node_list(node_id: str, access_token: str, operator_id: str) -> List:
     """
@@ -131,20 +154,22 @@ def get_node_list(node_id: str, access_token: str, operator_id: str) -> List:
     client = create_client()
     list_nodes_headers = dingtalkwiki__2__0_models.ListNodesHeaders()
     list_nodes_headers.x_acs_dingtalk_access_token = access_token
-    
+
     list_nodes_request = dingtalkwiki__2__0_models.ListNodesRequest(
         parent_node_id=node_id,
-        max_results=100, # 增加每次获取的数量
-        operator_id=operator_id
+        max_results=100,  # 增加每次获取的数量
+        operator_id=operator_id,
     )
-    
+
     all_nodes = []
     next_token = None
-    
+
     while True:
         list_nodes_request.next_token = next_token
         try:
-            response = client.list_nodes_with_options(list_nodes_request, list_nodes_headers, util_models.RuntimeOptions())
+            response = client.list_nodes_with_options(
+                list_nodes_request, list_nodes_headers, util_models.RuntimeOptions()
+            )
             if response.body and response.body.nodes:
                 all_nodes.extend(response.body.nodes)
             next_token = response.body.next_token
@@ -154,12 +179,16 @@ def get_node_list(node_id: str, access_token: str, operator_id: str) -> List:
             if not UtilClient.empty(err.code) and not UtilClient.empty(err.message):
                 print(f"API请求失败: {err.message}")
             break
-            
+
     return all_nodes
 
-def traverse_kb_nodes(node_id: str, access_token: str, operator_id: str, parent_path: str, file_tree: dict):
+
+def traverse_kb_nodes(
+    node_id: str, access_token: str, operator_id: str, parent_path: str, file_tree: dict
+):
     """
     递归地遍历所有知识库节点，构建文件树。
+    支持根据SYNC_FILTERS配置只同步指定的文件夹。
 
     Args:
         node_id (str): 当前要遍历的父节点的ID。
@@ -172,14 +201,40 @@ def traverse_kb_nodes(node_id: str, access_token: str, operator_id: str, parent_
     if nodes:
         for node in nodes:
             # 替换路径中可能存在的无效字符
-            safe_node_name = node.name.replace('/', '_').replace('\\', '_')
-            current_path = f"{parent_path}/{safe_node_name}" if parent_path else safe_node_name
+            safe_node_name = node.name.replace("/", "_").replace("\\", "_")
+            current_path = (
+                f"{parent_path}/{safe_node_name}" if parent_path else safe_node_name
+            )
+
+            # --- 新增：路径过滤逻辑 ---
+            should_traverse = True
+            if USE_SYNC_FILTER and WORKSPACE_NAME in SYNC_FILTERS:
+                # 获取需要同步的路径列表
+                include_paths = SYNC_FILTERS[WORKSPACE_NAME]
+
+                # 检查当前路径是否在需要同步的路径中
+                should_traverse = False
+                for include_path in include_paths:
+                    # 检查当前路径是否是包含路径本身，或者是包含路径的子目录
+                    if current_path == include_path or current_path.startswith(
+                        include_path + "/"
+                    ):
+                        should_traverse = True
+                        break
+
+                if not should_traverse:
+                    print(f"  [跳过] 路径 '{current_path}' 不在同步列表中")
+                    continue
+            # --- 结束 ---
+
             print(f"  正在处理知识库节点: {current_path} (类型: {node.type})")
-            
+
             if node.type == "FOLDER":
-                traverse_kb_nodes(node.node_id, access_token, operator_id, current_path, file_tree)
+                traverse_kb_nodes(
+                    node.node_id, access_token, operator_id, current_path, file_tree
+                )
             elif node.type == "FILE":
-                # --- 新增：处理文件后缀名 ---
+                # --- 处理文件后缀名 ---
                 name, ext = os.path.splitext(current_path)
                 if ext in EXTENSION_MAPPING:
                     new_ext = EXTENSION_MAPPING[ext]
@@ -191,8 +246,9 @@ def traverse_kb_nodes(node_id: str, access_token: str, operator_id: str, parent_
 
                 file_tree[final_path] = {
                     "modifiedTime": node.modified_time,
-                    "url": node.url
+                    "url": node.url,
                 }
+
 
 def get_nas_file_tree(nas_root_path):
     """
@@ -201,7 +257,9 @@ def get_nas_file_tree(nas_root_path):
     print(f"\n正在扫描本地NAS文件夹: {nas_root_path}")
     file_tree = {}
     if not os.path.isdir(nas_root_path):
-        print(f"警告: 本地NAS路径 '{nas_root_path}' 不存在或不是一个目录。将视为空文件夹。" )
+        print(
+            f"警告: 本地NAS路径 '{nas_root_path}' 不存在或不是一个目录。将视为空文件夹。"
+        )
         return file_tree
 
     for root, _, files in os.walk(nas_root_path):
@@ -210,18 +268,24 @@ def get_nas_file_tree(nas_root_path):
             # 使用os.path.normpath来规范化路径分隔符
             relative_path = os.path.normpath(os.path.relpath(file_path, nas_root_path))
             # 将Windows路径分隔符'\'统一替换为'/'
-            relative_path = relative_path.replace('\\', '/')
-            
+            relative_path = relative_path.replace("\\", "/")
+
             modified_time = os.path.getmtime(file_path)
             # 将时间戳转换为UTC时间的ISO 8601格式字符串，并附加'Z'
-            modified_time_iso = datetime.datetime.fromtimestamp(modified_time).isoformat(timespec='seconds') + 'Z'
-            
+            modified_time_iso = (
+                datetime.datetime.fromtimestamp(modified_time).isoformat(
+                    timespec="seconds"
+                )
+                + "Z"
+            )
+
             file_tree[relative_path] = {
                 "modifiedTime": modified_time_iso,
-                "path": file_path
+                "path": file_path,
             }
-    print("本地NAS文件夹扫描完成。" )
+    print("本地NAS文件夹扫描完成。")
     return file_tree
+
 
 def compare_trees_and_get_urls(kb_tree, nas_tree):
     """
@@ -233,31 +297,38 @@ def compare_trees_and_get_urls(kb_tree, nas_tree):
     for kb_path, kb_info in kb_tree.items():
         # 检查文件是否在NAS中不存在
         if kb_path not in nas_tree:
-            print(f"[新增] 文件 '{kb_path}' 在本地不存在，准备下载。" )
-            urls_to_download.append(kb_info['url'])
+            print(f"[新增] 文件 '{kb_path}' 在本地不存在，准备下载。")
+            urls_to_download.append(kb_info["url"])
         else:
             # 文件已存在，比较修改时间
             try:
                 # 解析不含毫秒和'Z'的ISO 8601时间字符串
-                nas_time_str = nas_tree[kb_path]['modifiedTime'].split('.')[0].replace('Z', '')
-                kb_time_str = kb_info['modifiedTime'].split('.')[0].replace('Z', '')
-                
+                nas_time_str = (
+                    nas_tree[kb_path]["modifiedTime"].split(".")[0].replace("Z", "")
+                )
+                kb_time_str = kb_info["modifiedTime"].split(".")[0].replace("Z", "")
+
                 nas_time = datetime.datetime.fromisoformat(nas_time_str)
                 kb_time = datetime.datetime.fromisoformat(kb_time_str)
 
                 if kb_time > nas_time:
-                    print(f"[更新] 文件 '{kb_path}' 在知识库中已更新，准备下载。 (知识库: {kb_time} > 本地: {nas_time})")
-                    urls_to_download.append(kb_info['url'])
+                    print(
+                        f"[更新] 文件 '{kb_path}' 在知识库中已更新，准备下载。 (知识库: {kb_time} > 本地: {nas_time})"
+                    )
+                    urls_to_download.append(kb_info["url"])
             except (ValueError, KeyError) as e:
-                print(f"警告: 处理文件 '{kb_path}' 的时间戳时出错: {e}。将默认下载该文件。" )
-                urls_to_download.append(kb_info['url'])
+                print(
+                    f"警告: 处理文件 '{kb_path}' 的时间戳时出错: {e}。将默认下载该文件。"
+                )
+                urls_to_download.append(kb_info["url"])
 
-    print("文件比较完成。" )
+    print("文件比较完成。")
     return urls_to_download
 
 
-def getdata(name, output, workspace_list, kb_tree_file, nas_path):
-    global WORKSPACE_NAME, OUTPUT_FILE, WORKSPACE_LIST_OUTPUT_FILE, KB_TREE_OUTPUT_FILE, NAS_ROOT_PATH
+def getdata(name, operatorid, output, workspace_list, kb_tree_file, nas_path):
+    global WORKSPACE_NAME, OUTPUT_FILE, WORKSPACE_LIST_OUTPUT_FILE, KB_TREE_OUTPUT_FILE, NAS_ROOT_PATH, OPERATOR_ID
+    OPERATOR_ID = operatorid
     WORKSPACE_NAME = name
     OUTPUT_FILE = output
     WORKSPACE_LIST_OUTPUT_FILE = workspace_list
@@ -265,9 +336,9 @@ def getdata(name, output, workspace_list, kb_tree_file, nas_path):
     NAS_ROOT_PATH = nas_path
 
 
-def main(name, output, workspace_list, kb_tree_file, nas_path, token):
+def main(name, operatorid, output, workspace_list, kb_tree_file, nas_path, token):
     # 初始化参数
-    getdata(name, output, workspace_list, kb_tree_file, nas_path)
+    getdata(name, operatorid, output, workspace_list, kb_tree_file, nas_path)
     global ACCESS_TOKEN
     ACCESS_TOKEN = token
 
@@ -279,7 +350,7 @@ def main(name, output, workspace_list, kb_tree_file, nas_path, token):
         print(f"\n开始遍历知识库: '{WORKSPACE_NAME}' (根节点ID: {root_node_id})")
         kb_tree = {}
         traverse_kb_nodes(root_node_id, ACCESS_TOKEN, OPERATOR_ID, "", kb_tree)
-        print("知识库遍历完成。" )
+        print("知识库遍历完成。")
 
         # 3. 将完整的知识库文件树写入JSON文件，供compare_move_file.py使用
         try:
@@ -289,13 +360,12 @@ def main(name, output, workspace_list, kb_tree_file, nas_path, token):
         except IOError as e:
             print(f"错误: 无法写入知识库文件树 '{KB_TREE_OUTPUT_FILE}': {e}")
 
-
         # 4. 获取NAS文件树
         nas_tree = get_nas_file_tree(NAS_ROOT_PATH)
 
         # 5. 比较文件树并获取需要下载的URL
         urls_to_download = compare_trees_and_get_urls(kb_tree, nas_tree)
-            
+
         # 6. 将需要下载的URL写入文件
         if urls_to_download:
             print(f"\n--- 发现 {len(urls_to_download)} 个文件需要下载 ---")
@@ -309,9 +379,10 @@ def main(name, output, workspace_list, kb_tree_file, nas_path, token):
         else:
             print("\n--- 所有文件都是最新的，无需下载。 ---")
 
-        print("\n任务完成！" )
+        print("\n任务完成！")
     else:
-        print(f"错误: 无法找到名为 '{WORKSPACE_NAME}' 的知识库。请检查名称是否正确。" )
+        print(f"错误: 无法找到名为 '{WORKSPACE_NAME}' 的知识库。请检查名称是否正确。")
+
 
 if __name__ == "__main__":
     # 这是一个示例，实际使用时请通过外部调用并传入参数
