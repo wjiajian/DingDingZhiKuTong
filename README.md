@@ -9,7 +9,9 @@
 *   **知识库同步 (DingTalk Sync)**
     *   **智能比较**：通过API获取知识库的完整目录结构，与本地文件夹进行比较，精确识别新增和修改过的文件。
     *   **增量更新**：只生成需要下载的新增或更新文件的URL列表，避免全量下载，提高效率。
+    *   **路径过滤**：支持指定知识库中的特定子文件夹进行同步。
     *   **精确同步**：确保最终的本地文件夹内容与钉钉知识库的线上状态完全一致，可自动删除本地多余的文件和目录。
+    *   **保护机制**：支持保护 NAS 中不在知识库的文件/文件夹不被删除。
     *   **格式自动转换**：自动将钉钉的专有后缀（如 `.adoc`, `.axls`）映射为标准的Office后缀（`.docx`, `.xlsx`），确保本地文件兼容性。
 
 ## 📋 目录结构
@@ -55,6 +57,12 @@ WORKSPACE_NAME = "您的知识库完整名称"
 NAS_ROOT_PATH = "./nas_final"  # 您本地的最终目标文件夹
 KB_TREE_OUTPUT_FILE = "kb_tree.json"
 OUTPUT_FILE = "urls_to_download.txt"
+
+# （可选）指定需要同步的子文件夹路径
+SYNC_FILTERS = {
+    "知识库名称": ["子文件夹1", "子文件夹2/子子文件夹"],
+}
+USE_SYNC_FILTER = True
 ```
 
 **执行**：
@@ -92,6 +100,12 @@ download_new/
 KB_TREE_JSON = 'kb_tree.json'      # 步骤1生成的文件
 SOURCE_DIR = 'download_new'          # 步骤2整理好的源文件夹
 DEST_DIR = 'nas_final'               # 最终的NAS目标文件夹
+
+# （可选）保护NAS中不在知识库的文件/文件夹不被删除
+PROTECTED_ITEMS = [
+    "产品中心/内部资料",
+    "机密文档/重要文件.docx",
+]
 ```
 
 **执行**：
@@ -108,7 +122,7 @@ sync_nas_with_kb_tree(..., dry_run=False)
 ```
 
 **过程**：
-1.  **清理阶段**: 脚本会检查 `DEST_DIR`，如果发现任何在 `kb_tree.json` 中不存在的文件或空目录，都会将其删除。
+1.  **清理阶段**: 删除 NAS 中不存在于知识库的文件和空目录（`PROTECTED_ITEMS` 中的项目除外）。
 2.  **移动阶段**: 脚本会遍历 `SOURCE_DIR`，将所有新文件移动到 `DEST_DIR` 的正确位置。
 
 **最终结果**：
