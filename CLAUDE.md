@@ -10,8 +10,8 @@ DingDingZhiKuTong is a DingTalk knowledge base synchronization toolkit for enter
 
 This project uses a three-stage workflow:
 
-1. **API Data Fetching** (`get_KB_FILE_URL.py`)
-   - Fetches DingTalk API access token (via `getToken.py`)
+1. **API Data Fetching** (`get_kb_file_urls.py`)
+   - Fetches DingTalk API access token (via `get_token.py`)
    - Recursively traverses the knowledge base file tree (supports subfolder filtering)
    - Scans local NAS file tree
    - Compares file trees and generates differential list
@@ -38,8 +38,8 @@ pip install alibabacloud_dingtalk alibabacloud_tea_openapi alibabacloud_tea_util
 
 All configuration is done via global variables in the Python files:
 
-**In `get_KB_FILE_URL.py`:**
-- `ACCESS_TOKEN` - DingTalk API access token (from `getToken.py`)
+**In `get_kb_file_urls.py`:**
+- `ACCESS_TOKEN` - DingTalk API access token (from `get_token.py`)
 - `OPERATOR_ID` - Operator's unionId
 - `WORKSPACE_NAME` - Full name of target knowledge base
 - `NAS_ROOT_PATH` - Local target folder path

@@ -15,7 +15,6 @@ PROTECTED_ITEMS = [
     # "机密文档/重要文件.docx",
     # "开发部/临时文件",
 ]
-
 # ============================================================
 
 
@@ -102,11 +101,9 @@ def sync_nas_with_kb_tree(
             for name in files:
                 file_path = os.path.join(root, name)
                 # 规范化路径并统一使用正斜杠
-                relative_path = (
-                    os.path.normpath(os.path.relpath(file_path, destination_folder)).replace(
-                        os.sep, "/"
-                    )
-                )
+                relative_path = os.path.normpath(
+                    os.path.relpath(file_path, destination_folder)
+                ).replace(os.sep, "/")
 
                 # 检查是否受保护
                 if _is_protected(relative_path, protected_items):
@@ -127,11 +124,9 @@ def sync_nas_with_kb_tree(
                 # 检查目录是否为空
                 if not os.listdir(dir_path):
                     # 规范化路径并统一使用正斜杠
-                    relative_path = (
-                        os.path.normpath(os.path.relpath(dir_path, destination_folder)).replace(
-                            os.sep, "/"
-                        )
-                    )
+                    relative_path = os.path.normpath(
+                        os.path.relpath(dir_path, destination_folder)
+                    ).replace(os.sep, "/")
 
                     # 检查是否受保护
                     if _is_protected(relative_path, protected_items):

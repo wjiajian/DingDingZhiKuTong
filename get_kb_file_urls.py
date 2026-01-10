@@ -26,7 +26,9 @@ from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_tea_util import models as util_models
 from alibabacloud_tea_util.client import Client as UtilClient
 
-# --- 配置区 ---
+# ============================================================
+# 基础配置
+# ============================================================
 # 请根据您的实际情况修改以下配置
 ACCESS_TOKEN = ""  # 访问钉钉API的access_token
 OPERATOR_ID = ""  # 钉钉用户的unionId，需要通过钉钉开发者后台获取
@@ -35,10 +37,15 @@ OUTPUT_FILE = ""  # 定义输出文件的名称，用于存储所有文档的URL
 WORKSPACE_LIST_OUTPUT_FILE = ""  # 存储获取的知识库列表的文件
 KB_TREE_OUTPUT_FILE = ""  # 存储知识库完整文件树的JSON文件
 NAS_ROOT_PATH = ""  # 要对比的本地NAS文件夹根路径
+# ============================================================
 
+# ============================================================
+# 白名单配置
+# ============================================================
 # 指定需要同步的子文件夹路径（相对于知识库根目录）
 # 例如：只同步"天猫部知识库"下的"天猫部SOP"文件夹
 # 格式："知识库名称":["需要同步的路径列表"]
+# ============================================================
 SYNC_FILTERS = {
     "天猫部知识库": ["天猫部SOP"],
     # 可以添加更多知识库和对应的同步路径
@@ -48,6 +55,7 @@ SYNC_FILTERS = {
 # 如果设置为True，则只同步SYNC_FILTERS中指定的路径
 # 如果设置为False或知识库不在SYNC_FILTERS中，则同步整个知识库
 USE_SYNC_FILTER = True
+# ============================================================
 
 # ============================================================
 # 黑名单配置
@@ -62,21 +70,19 @@ BLACKLIST = [
     # "废弃文档/旧版本",
     # "内部资料/机密文件.docx",
 ]
-
 # ============================================================
 
-# WORKSPACE_NAME = "知识库导入NAS测试库"                    # 需要遍历的目标知识库的完整名称
-# OUTPUT_FILE = ".\url.json"                              # 定义输出文件的名称，用于存储所有文档的URL
-# WORKSPACE_LIST_OUTPUT_FILE = ".\workspaces_list.json"   # 存储获取的知识库列表的文件
-# KB_TREE_OUTPUT_FILE = ".\kb_tree.json"
-# NAS_ROOT_PATH = ".\path"
-
-# 钉钉文件后缀到标准Office后缀的映射
+# ============================================================
+# 文件扩展名映射
+# ============================================================
+# 钉钉专有后缀到标准Office后缀的映射
+# ============================================================
 EXTENSION_MAPPING = {
     ".adoc": ".docx",
     ".axls": ".xlsx",
     ".aslide": ".pptx",
 }
+# ============================================================
 
 
 def _is_blacklisted(current_path: str, blacklist: list) -> bool:
@@ -264,14 +270,12 @@ def traverse_kb_nodes(
                 if not should_traverse:
                     print(f"  [跳过] 路径 '{current_path}' 不在同步列表中")
                     continue
-            # --- 结束 ---
 
             # --- 黑名单检查 ---
             # 黑名单优先级高于白名单，即使路径在SYNC_FILTERS中也会被排除
             if _is_blacklisted(current_path, BLACKLIST):
                 print(f"  [黑名单跳过] 路径 '{current_path}' 在黑名单中")
                 continue
-            # --- 结束 ---
 
             print(f"  正在处理知识库节点: {current_path} (类型: {node.type})")
 
@@ -288,7 +292,6 @@ def traverse_kb_nodes(
                     print(f"    后缀名转换: '{ext}' -> '{new_ext}'")
                 else:
                     final_path = current_path
-                # --- 结束 ---
 
                 file_tree[final_path] = {
                     "modifiedTime": node.modified_time,
