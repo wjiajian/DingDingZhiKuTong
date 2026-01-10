@@ -206,18 +206,22 @@ def traverse_kb_nodes(
                 f"{parent_path}/{safe_node_name}" if parent_path else safe_node_name
             )
 
-            # --- 新增：路径过滤逻辑 ---
+            # --- 路径过滤逻辑 ---
+            # 当启用过滤时，只遍历SYNC_FILTERS中指定的路径及其父目录
             should_traverse = True
             if USE_SYNC_FILTER and WORKSPACE_NAME in SYNC_FILTERS:
-                # 获取需要同步的路径列表
                 include_paths = SYNC_FILTERS[WORKSPACE_NAME]
-
-                # 检查当前路径是否在需要同步的路径中
                 should_traverse = False
+
                 for include_path in include_paths:
-                    # 检查当前路径是否是包含路径本身，或者是包含路径的子目录
-                    if current_path == include_path or current_path.startswith(
-                        include_path + "/"
+                    # 匹配条件：
+                    # 1. 当前路径就是目标路径
+                    # 2. 当前路径是目标路径的子目录
+                    # 3. 当前路径是目标路径的父目录（需要进入才能到达目标）
+                    if (
+                        current_path == include_path
+                        or current_path.startswith(include_path + "/")
+                        or include_path.startswith(current_path + "/")
                     ):
                         should_traverse = True
                         break
