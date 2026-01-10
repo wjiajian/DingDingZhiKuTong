@@ -49,6 +49,22 @@ SYNC_FILTERS = {
 # 如果设置为False或知识库不在SYNC_FILTERS中，则同步整个知识库
 USE_SYNC_FILTER = True
 
+# ============================================================
+# 黑名单配置
+# ============================================================
+# 在此列表中添加需要排除的文件或文件夹路径（相对于知识库根目录）
+# 支持精确匹配和目录递归排除（黑名单目录时，其下所有内容也排除）
+# 黑名单优先级高于白名单
+# ============================================================
+BLACKLIST = [
+    # 示例：
+    # "临时文件",
+    # "废弃文档/旧版本",
+    # "内部资料/机密文件.docx",
+]
+
+# ============================================================
+
 # WORKSPACE_NAME = "知识库导入NAS测试库"                    # 需要遍历的目标知识库的完整名称
 # OUTPUT_FILE = ".\url.json"                              # 定义输出文件的名称，用于存储所有文档的URL
 # WORKSPACE_LIST_OUTPUT_FILE = ".\workspaces_list.json"   # 存储获取的知识库列表的文件
@@ -61,6 +77,25 @@ EXTENSION_MAPPING = {
     ".axls": ".xlsx",
     ".aslide": ".pptx",
 }
+
+
+def _is_blacklisted(current_path: str, blacklist: list) -> bool:
+    """
+    检查路径是否在黑名单中。
+    支持精确匹配和目录前缀匹配（黑名单目录时，其下所有内容也排除）。
+
+    :param current_path: 当前路径
+    :param blacklist: 黑名单列表（相对路径列表）
+    :return: True 表示在黑名单中，False 表示不在黑名单中
+    """
+    for item in blacklist:
+        # 精确匹配
+        if current_path == item:
+            return True
+        # 检查当前路径是否是黑名单目录下的文件/子目录
+        if current_path.startswith(item + "/"):
+            return True
+    return False
 
 
 def get_workspaces(access_token: str, operator_id: str):
@@ -229,6 +264,13 @@ def traverse_kb_nodes(
                 if not should_traverse:
                     print(f"  [跳过] 路径 '{current_path}' 不在同步列表中")
                     continue
+            # --- 结束 ---
+
+            # --- 黑名单检查 ---
+            # 黑名单优先级高于白名单，即使路径在SYNC_FILTERS中也会被排除
+            if _is_blacklisted(current_path, BLACKLIST):
+                print(f"  [黑名单跳过] 路径 '{current_path}' 在黑名单中")
+                continue
             # --- 结束 ---
 
             print(f"  正在处理知识库节点: {current_path} (类型: {node.type})")

@@ -24,19 +24,19 @@ def _is_protected(relative_path, protected_items):
     检查路径是否在保护列表中。
     支持精确匹配和目录前缀匹配（保护目录时，其下所有内容也受保护）。
 
-    :param relative_path: 相对于目标文件夹的相对路径
+    :param relative_path: 相对于目标文件夹的相对路径（使用正斜杠）
     :param protected_items: 受保护的项目列表（相对路径列表）
     :return: True 表示受保护，False 表示不受保护
     """
-    normalized_path = os.path.normpath(relative_path)
+    normalized_path = os.path.normpath(relative_path).replace(os.sep, "/")
 
     for item in protected_items:
-        normalized_item = os.path.normpath(item)
+        normalized_item = os.path.normpath(item).replace(os.sep, "/")
         # 精确匹配
         if normalized_path == normalized_item:
             return True
         # 检查是否是受保护目录下的文件/子目录
-        if normalized_path.startswith(normalized_item + os.sep):
+        if normalized_path.startswith(normalized_item + "/"):
             return True
 
     return False
@@ -77,9 +77,10 @@ def sync_nas_with_kb_tree(
         print(f"错误: 解析知识库文件树 '{kb_tree_file}' 失败。")
         return
 
-    # 规范化kb_tree的键，以匹配本地文件系统
-    # 将所有路径分隔符统一为os.sep
-    normalized_kb_paths = {os.path.normpath(p) for p in kb_tree.keys()}
+    # 规范化kb_tree的键，统一使用正斜杠作为路径分隔符（跨平台兼容）
+    normalized_kb_paths = {
+        os.path.normpath(p).replace(os.sep, "/") for p in kb_tree.keys()
+    }
 
     # 确定受保护项目列表
     if protected_items is None:
@@ -100,8 +101,11 @@ def sync_nas_with_kb_tree(
             # 清理文件
             for name in files:
                 file_path = os.path.join(root, name)
-                relative_path = os.path.normpath(
-                    os.path.relpath(file_path, destination_folder)
+                # 规范化路径并统一使用正斜杠
+                relative_path = (
+                    os.path.normpath(os.path.relpath(file_path, destination_folder)).replace(
+                        os.sep, "/"
+                    )
                 )
 
                 # 检查是否受保护
@@ -122,9 +126,11 @@ def sync_nas_with_kb_tree(
                 dir_path = os.path.join(root, name)
                 # 检查目录是否为空
                 if not os.listdir(dir_path):
-                    # 检查该目录本身是否应该存在（通过检查是否有任何kb路径以它开头）
-                    relative_path = os.path.normpath(
-                        os.path.relpath(dir_path, destination_folder)
+                    # 规范化路径并统一使用正斜杠
+                    relative_path = (
+                        os.path.normpath(os.path.relpath(dir_path, destination_folder)).replace(
+                            os.sep, "/"
+                        )
                     )
 
                     # 检查是否受保护
@@ -134,8 +140,7 @@ def sync_nas_with_kb_tree(
 
                     # 如果没有任何知识库文件路径以这个目录作为前缀，那么它就是多余的
                     is_needed_dir = any(
-                        p.startswith(relative_path + os.sep)
-                        for p in normalized_kb_paths
+                        p.startswith(relative_path + "/") for p in normalized_kb_paths
                     )
 
                     if not is_needed_dir:
