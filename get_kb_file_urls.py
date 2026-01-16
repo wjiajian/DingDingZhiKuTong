@@ -70,6 +70,24 @@ BLACKLIST = [
     # "废弃文档/旧版本",
     # "内部资料/机密文件.docx",
 ]
+
+# 文件扩展名黑名单
+# 在此列表中添加需要排除的文件扩展名（带点号前缀）
+# 匹配到黑名单扩展名的文件将被跳过，不会加入同步列表
+# ============================================================
+FILE_EXTENSION_BLACKLIST = [
+    ".zip",
+    ".mp4",
+    ".exe",
+    ".rar",
+    ".7z",
+    ".tar",
+    ".gz",
+    ".avi",
+    ".mov",
+    ".mkv",
+    # 可以继续添加其他需要排除的扩展名
+]
 # ============================================================
 
 # ============================================================
@@ -284,8 +302,15 @@ def traverse_kb_nodes(
                     node.node_id, access_token, operator_id, current_path, file_tree
                 )
             elif node.type == "FILE":
-                # --- 处理文件后缀名 ---
+                # --- 检查文件扩展名黑名单 ---
                 name, ext = os.path.splitext(current_path)
+                if ext.lower() in FILE_EXTENSION_BLACKLIST:
+                    print(
+                        f"  [扩展名黑名单跳过] 文件 '{current_path}' 扩展名 '{ext}' 在黑名单中"
+                    )
+                    continue
+
+                # --- 处理文件后缀名映射 ---
                 if ext in EXTENSION_MAPPING:
                     new_ext = EXTENSION_MAPPING[ext]
                     final_path = name + new_ext
