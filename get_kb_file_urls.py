@@ -323,6 +323,11 @@ def traverse_kb_nodes(
                     "url": node.url,
                 }
 
+                # FILE类型节点也可能存在子文件节点，需要继续递归遍历
+                traverse_kb_nodes(
+                    node.node_id, access_token, operator_id, current_path, file_tree
+                )
+
 
 def get_nas_file_tree(nas_root_path):
     """
